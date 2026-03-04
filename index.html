@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Image to SGF</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="hero">
+        <h1>Image to SGF</h1>
+        <p>Upload a Go board image, detect intersections, convert stones to coordinates, and export SGF.</p>
+      </header>
+
+      <section class="steps" aria-label="Workflow steps">
+        <article class="step-card" id="step1-card">
+          <h2>1. Image Upload & Recognition</h2>
+
+          <div class="controls-row">
+            <label class="file-input-label">
+              <span>Board image</span>
+              <input type="file" id="imageInput" accept="image/*" />
+            </label>
+
+            <label>
+              Board size
+              <select id="boardSizeSelect">
+                <option value="9">9x9</option>
+                <option value="13">13x13</option>
+                <option value="19" selected>19x19</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="controls-row">
+            <button id="autoCornersBtn" type="button">Auto detect corners</button>
+            <button id="resetCornersBtn" type="button" class="ghost">Reset corners</button>
+          </div>
+
+          <p class="hint">Click corners in this order if auto-detect misses: top-left, top-right, bottom-right, bottom-left.</p>
+
+          <canvas id="sourceCanvas" width="900" height="620"></canvas>
+          <p id="cornerStatus" class="status">Waiting for image upload.</p>
+        </article>
+
+        <article class="step-card" id="step2-card">
+          <h2>2. Coordinates & Properties</h2>
+
+          <div class="controls-row">
+            <label>
+              Black threshold
+              <input type="range" id="blackThreshold" min="10" max="90" value="24" />
+            </label>
+
+            <label>
+              White threshold
+              <input type="range" id="whiteThreshold" min="10" max="90" value="22" />
+            </label>
+
+            <button id="extractBtn" type="button">Extract stones</button>
+          </div>
+
+          <canvas id="warpCanvas" width="620" height="620"></canvas>
+          <p id="extractStatus" class="status">Set 4 corners, then extract stones.</p>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Coordinate</th>
+                  <th>Property</th>
+                  <th>Color</th>
+                </tr>
+              </thead>
+              <tbody id="stoneTableBody"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="step-card" id="step3-card">
+          <h2>3. SGF Generation</h2>
+
+          <div class="controls-row">
+            <label>
+              Game name
+              <input id="gameName" type="text" placeholder="Imported position" />
+            </label>
+
+            <label>
+              Komi
+              <input id="komiInput" type="text" value="6.5" />
+            </label>
+          </div>
+
+          <div class="controls-row">
+            <button id="generateBtn" type="button">Generate SGF</button>
+            <button id="downloadBtn" type="button" class="ghost">Download .sgf</button>
+          </div>
+
+          <textarea id="sgfOutput" rows="10" readonly placeholder="SGF output appears here..."></textarea>
+          <p id="sgfStatus" class="status">No SGF generated yet.</p>
+        </article>
+      </section>
+    </main>
+
+    <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
