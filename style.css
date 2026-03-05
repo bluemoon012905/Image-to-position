@@ -237,7 +237,8 @@ textarea {
 
 #sgfPreviewCanvas {
   margin-bottom: 0;
-  max-height: 260px;
+  max-height: none;
+  height: auto;
   object-fit: contain;
 }
 
@@ -279,20 +280,5 @@ textarea {
 
   #step2-card {
     grid-column: span 1;
-  }
-}
-
-@media (min-width: 740px) {
-  .sgf-studio {
-    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
-    align-items: stretch;
-  }
-
-  #sgfPreviewCanvas {
-    max-height: 310px;
-  }
-
-  #sgfOutput {
-    min-height: 310px;
   }
 }
