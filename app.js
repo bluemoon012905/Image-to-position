@@ -12,7 +12,6 @@ const state = {
   isCropping: false,
   rawStones: [],
   stones: [],
-  sizeBuckets: [],
 };
 
 const sourceCanvas = document.getElementById("sourceCanvas");
@@ -33,11 +32,9 @@ const cancelCropBtn = document.getElementById("cancelCropBtn");
 const extractBtn = document.getElementById("extractBtn");
 const generateBtn = document.getElementById("generateBtn");
 const downloadBtn = document.getElementById("downloadBtn");
-const applySizeFilterBtn = document.getElementById("applySizeFilterBtn");
 
 const blackThresholdInput = document.getElementById("blackThreshold");
 const whiteThresholdInput = document.getElementById("whiteThreshold");
-const sizeBucketSelect = document.getElementById("sizeBucketSelect");
 const boardAnchorSelect = document.getElementById("boardAnchorSelect");
 
 const cornerStatus = document.getElementById("cornerStatus");
@@ -672,22 +669,6 @@ function renderStoneTable(stones) {
   });
 }
 
-function buildSizeBuckets(stones, step) {
-  const bucketWidth = Math.max(1.5, step * 0.08);
-  const map = new Map();
-
-  for (const stone of stones) {
-    const bucketCenter = Math.round(stone.radius / bucketWidth) * bucketWidth;
-    const key = bucketCenter.toFixed(2);
-    if (!map.has(key)) {
-      map.set(key, { key, center: Number(key), count: 0 });
-    }
-    map.get(key).count += 1;
-  }
-
-  return [...map.values()].sort((a, b) => b.count - a.count);
-}
-
 function resolveAutoAnchor() {
   const m = state.drawMeta;
   const corners = state.activeCorners;
@@ -746,29 +727,7 @@ function remapStonesToAnchor(stones, n, anchorMode) {
   });
 }
 
-function fillSizeBucketSelect(buckets) {
-  sizeBucketSelect.innerHTML = "";
-
-  const allOpt = document.createElement("option");
-  allOpt.value = "all";
-  allOpt.textContent = "All detected sizes";
-  sizeBucketSelect.appendChild(allOpt);
-
-  buckets.forEach((bucket) => {
-    const opt = document.createElement("option");
-    opt.value = bucket.key;
-    opt.textContent = `r~${bucket.center.toFixed(1)}px (${bucket.count} stones)`;
-    sizeBucketSelect.appendChild(opt);
-  });
-
-  if (buckets.length > 0) {
-    sizeBucketSelect.value = buckets[0].key;
-  } else {
-    sizeBucketSelect.value = "all";
-  }
-}
-
-function applySizeFilter() {
+function applyPositionMapping() {
   if (!state.rawStones.length || !state.warpedImageData) {
     setStatus(extractStatus, "Run extraction first.");
     return;
@@ -777,29 +736,19 @@ function applySizeFilter() {
   const n = state.boardSize;
   const size = warpCanvas.width;
   const step = (size - 1) / (n - 1);
-  const selected = sizeBucketSelect.value;
-  const tolerance = Math.max(1.4, step * 0.06);
-
-  let filtered = state.rawStones;
-  if (selected !== "all") {
-    const center = Number(selected);
-    filtered = state.rawStones.filter((stone) => Math.abs(stone.radius - center) <= tolerance);
-  }
-
-  const mapped = remapStonesToAnchor(filtered, n, boardAnchorSelect.value);
+  const mapped = remapStonesToAnchor(state.rawStones, n, boardAnchorSelect.value);
   state.stones = mapped;
-  renderWarpAndStoneMarkers(filtered, step);
+  renderWarpAndStoneMarkers(state.rawStones, step);
   renderStoneTable(mapped);
   drawSgfPreview(mapped, n);
 
   const blackCount = mapped.filter((s) => s.color === "black").length;
   const whiteCount = mapped.filter((s) => s.color === "white").length;
   const anchorResolved = boardAnchorSelect.value === "auto" ? resolveAutoAnchor() : boardAnchorSelect.value;
-  const sizeLabel = selected === "all" ? "all sizes" : `size bucket r~${Number(selected).toFixed(1)}px`;
   const shiftY = Number(sgfShiftYInput?.value || 0);
   setStatus(
     extractStatus,
-    `Showing ${mapped.length} stones (${blackCount} black, ${whiteCount} white) using ${sizeLabel}, anchor=${anchorResolved}, y-shift=${shiftY}.`
+    `Showing ${mapped.length} stones (${blackCount} black, ${whiteCount} white), anchor=${anchorResolved}, y-shift=${shiftY}.`
   );
 }
 
@@ -818,8 +767,6 @@ function extractStones() {
   if (!points.length) {
     state.rawStones = [];
     state.stones = [];
-    state.sizeBuckets = [];
-    fillSizeBucketSelect([]);
     renderWarpAndStoneMarkers([], step);
     renderStoneTable([]);
     drawSgfPreview([], n);
@@ -856,10 +803,8 @@ function extractStones() {
   }
 
   state.rawStones = stones;
-  state.sizeBuckets = buildSizeBuckets(stones, step);
-  fillSizeBucketSelect(state.sizeBuckets);
   if (stones.length) {
-    applySizeFilter();
+    applyPositionMapping();
   } else {
     state.stones = [];
     renderWarpAndStoneMarkers([], step);
@@ -963,13 +908,11 @@ function resetStateForNewImage() {
   state.isCropping = false;
   state.rawStones = [];
   state.stones = [];
-  state.sizeBuckets = [];
   state.warpedImageData = null;
 
   clearCanvas(warpCtx, warpCanvas);
   drawSgfPreview([], state.boardSize);
   stoneTableBody.innerHTML = "";
-  fillSizeBucketSelect([]);
   sgfOutput.value = "";
   setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
   setStatus(sgfStatus, "No SGF generated yet.");
@@ -1110,12 +1053,10 @@ resetCornersBtn.addEventListener("click", () => {
   state.activeCorners = [];
   state.rawStones = [];
   state.stones = [];
-  state.sizeBuckets = [];
   state.warpedImageData = null;
   drawSourceImage();
   clearCanvas(warpCtx, warpCanvas);
   stoneTableBody.innerHTML = "";
-  fillSizeBucketSelect([]);
   setStatus(cornerStatus, "Corners reset.");
   setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
 });
@@ -1154,10 +1095,8 @@ cancelCropBtn.addEventListener("click", () => {
 });
 
 extractBtn.addEventListener("click", extractStones);
-applySizeFilterBtn.addEventListener("click", applySizeFilter);
-sizeBucketSelect.addEventListener("change", applySizeFilter);
-boardAnchorSelect.addEventListener("change", applySizeFilter);
-sgfShiftYInput.addEventListener("input", applySizeFilter);
+boardAnchorSelect.addEventListener("change", applyPositionMapping);
+sgfShiftYInput.addEventListener("input", applyPositionMapping);
 sgfShiftYInput.addEventListener("input", updateSgfShiftLabel);
 generateBtn.addEventListener("click", generateSgf);
 downloadBtn.addEventListener("click", downloadSgf);
