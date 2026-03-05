@@ -14,6 +14,8 @@ const sourceCanvas = document.getElementById("sourceCanvas");
 const sourceCtx = sourceCanvas.getContext("2d");
 const warpCanvas = document.getElementById("warpCanvas");
 const warpCtx = warpCanvas.getContext("2d");
+const sgfPreviewCanvas = document.getElementById("sgfPreviewCanvas");
+const sgfPreviewCtx = sgfPreviewCanvas.getContext("2d");
 
 const imageInput = document.getElementById("imageInput");
 const pasteZone = document.getElementById("pasteZone");
@@ -45,6 +47,77 @@ function setStatus(el, message) {
 
 function clearCanvas(ctx, canvas) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function drawSgfPreview(stones = state.stones, n = state.boardSize) {
+  const ctx = sgfPreviewCtx;
+  const canvas = sgfPreviewCanvas;
+  const size = Math.min(canvas.width, canvas.height);
+  const margin = Math.round(size * 0.08);
+  const boardArea = size - margin * 2;
+  const step = boardArea / (n - 1);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#dcc298";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.save();
+  ctx.translate((canvas.width - size) / 2, (canvas.height - size) / 2);
+
+  ctx.strokeStyle = "rgba(26, 20, 14, 0.75)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < n; i += 1) {
+    const pos = margin + i * step;
+    ctx.beginPath();
+    ctx.moveTo(margin, pos);
+    ctx.lineTo(margin + boardArea, pos);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(pos, margin);
+    ctx.lineTo(pos, margin + boardArea);
+    ctx.stroke();
+  }
+
+  const starMap = {
+    19: [3, 9, 15],
+    13: [3, 6, 9],
+    9: [2, 4, 6],
+  };
+  const starPts = starMap[n] || [];
+  ctx.fillStyle = "rgba(30, 21, 13, 0.76)";
+  for (const r of starPts) {
+    for (const c of starPts) {
+      const x = margin + c * step;
+      const y = margin + r * step;
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(2, step * 0.1), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  const stoneRadius = Math.max(3, step * 0.44);
+  for (const stone of stones) {
+    const x = margin + stone.col * step;
+    const y = margin + stone.row * step;
+
+    ctx.beginPath();
+    ctx.arc(x, y, stoneRadius, 0, Math.PI * 2);
+    if (stone.color === "black") {
+      ctx.fillStyle = "#111";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else if (stone.color === "white") {
+      ctx.fillStyle = "#f9f9f7";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.38)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
 }
 
 function drawSourceImage() {
@@ -472,6 +545,7 @@ function applySizeFilter() {
   state.stones = filtered;
   renderWarpAndStoneMarkers(filtered, step);
   renderStoneTable(filtered);
+  drawSgfPreview(filtered, n);
 
   const blackCount = filtered.filter((s) => s.color === "black").length;
   const whiteCount = filtered.filter((s) => s.color === "white").length;
@@ -597,6 +671,7 @@ function generateSgf() {
   sgf += ")";
 
   sgfOutput.value = sgf;
+  drawSgfPreview(state.stones, n);
   setStatus(
     sgfStatus,
     `SGF generated with ${blackCoords.length} black and ${whiteCoords.length} white setup stones.`
@@ -626,6 +701,7 @@ function resetStateForNewImage() {
   state.warpedImageData = null;
 
   clearCanvas(warpCtx, warpCanvas);
+  drawSgfPreview([], state.boardSize);
   stoneTableBody.innerHTML = "";
   fillSizeBucketSelect([]);
   sgfOutput.value = "";
@@ -756,3 +832,4 @@ function waitForCv() {
 }
 
 waitForCv();
+drawSgfPreview([], state.boardSize);

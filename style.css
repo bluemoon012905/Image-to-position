@@ -184,6 +184,10 @@ textarea {
   resize: vertical;
 }
 
+#sgfPreviewCanvas {
+  background: #dcc298;
+}
+
 @media (min-width: 1040px) {
   .steps {
     grid-template-columns: repeat(3, minmax(0, 1fr));
