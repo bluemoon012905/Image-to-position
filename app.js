@@ -17,6 +17,7 @@ const state = {
   manualEdits: {},
   hoverPoint: null,
   puzzleMode: false,
+  preprocessMode: "off",
   puzzleVisibleCols: 0,
   puzzleVisibleRows: 0,
   detectedPuzzleGrid: null,
@@ -36,6 +37,7 @@ const imageInput = document.getElementById("imageInput");
 const pasteZone = document.getElementById("pasteZone");
 const boardSizeSelect = document.getElementById("boardSizeSelect");
 const puzzleModeSelect = document.getElementById("puzzleModeSelect");
+const preprocessModeSelect = document.getElementById("preprocessModeSelect");
 const autoCornersBtn = document.getElementById("autoCornersBtn");
 const resetCornersBtn = document.getElementById("resetCornersBtn");
 const cropModeBtn = document.getElementById("cropModeBtn");
@@ -682,6 +684,44 @@ function drawWarpGrid(gridOverride = null) {
   warpCtx.restore();
 }
 
+function preprocessWarpImage() {
+  if (!state.warpedImageData || state.preprocessMode === "off") return;
+
+  const src = cv.imread(warpCanvas);
+  const gray = new cv.Mat();
+  const smooth = new cv.Mat();
+  const eq = new cv.Mat();
+  const tuned = new cv.Mat();
+  const out = new cv.Mat();
+
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+  if (state.preprocessMode === "strong") {
+    cv.medianBlur(gray, smooth, 5);
+    cv.GaussianBlur(smooth, smooth, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+  } else {
+    cv.GaussianBlur(gray, smooth, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
+  }
+
+  cv.equalizeHist(smooth, eq);
+  if (state.preprocessMode === "strong") {
+    cv.convertScaleAbs(eq, tuned, 1.28, 8);
+  } else {
+    cv.convertScaleAbs(eq, tuned, 1.16, 4);
+  }
+  cv.cvtColor(tuned, out, cv.COLOR_GRAY2RGBA);
+
+  cv.imshow(warpCanvas, out);
+  state.warpedImageData = warpCtx.getImageData(0, 0, warpCanvas.width, warpCanvas.height);
+
+  src.delete();
+  gray.delete();
+  smooth.delete();
+  eq.delete();
+  tuned.delete();
+  out.delete();
+}
+
 function sampleCircleStats(imgData, cx, cy, rInner, rOuter = rInner) {
   const { data, width, height } = imgData;
   let sum = 0;
@@ -1236,6 +1276,7 @@ function extractStones() {
   const n = state.boardSize;
   const size = warpCanvas.width;
   const boardStep = (size - 1) / (n - 1);
+  preprocessWarpImage();
   const circleCandidates = detectCircleCandidates(boardStep);
   let points = circlesToIntersections(circleCandidates, n, boardStep);
   let samplingStep = boardStep;
@@ -1322,7 +1363,7 @@ function extractStones() {
       : "";
   setStatus(
     sgfStatus,
-    `Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white).${puzzleText}`
+    `Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Cleanup=${state.preprocessMode}.${puzzleText}`
   );
 }
 
@@ -1508,6 +1549,11 @@ puzzleModeSelect.addEventListener("change", () => {
     setPuzzleVisibleGrid(0, 0);
   }
   setStatus(extractStatus, `Puzzle mode ${modeText}. Re-extract to apply.`);
+});
+
+preprocessModeSelect.addEventListener("change", () => {
+  state.preprocessMode = preprocessModeSelect.value;
+  setStatus(extractStatus, `Image cleanup set to ${state.preprocessMode}. Re-extract to apply.`);
 });
 
 puzzleColsInput.addEventListener("change", () => {

@@ -29,6 +29,7 @@ Open: `http://localhost:8080`
 - Corner auto-detect and stone-circle detection use OpenCV.js in the browser.
 - You can import with file upload or by pasting an image into the paste box.
 - You can crop after upload/paste using `Crop mode` -> drag box -> `Apply crop`.
+- `Image cleanup` (off/light/strong) can improve low-quality image detection by smoothing noise and boosting contrast.
 - Step 3 includes a visual SGF preview board before download.
 - Step 3 lets you click the preview to add/remove stones and use a D-pad to nudge position in any direction; center is a 90-degree rotate button.
 - Use `Puzzle mode` in Step 1 for partial-board snippets; it estimates visible grid count before mapping to full-board coordinates, and you can edit visible cols/rows in Step 2.
