@@ -240,6 +240,7 @@ textarea {
   max-height: none;
   height: auto;
   object-fit: contain;
+  cursor: crosshair;
 }
 
 #sgfOutput {

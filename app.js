@@ -15,6 +15,7 @@ const state = {
   rotation: 0,
   editTool: "erase",
   manualEdits: {},
+  hoverPoint: null,
   puzzleMode: false,
   puzzleVisibleCols: 0,
   puzzleVisibleRows: 0,
@@ -115,6 +116,7 @@ function updateEditToolUI() {
 function setEditTool(tool) {
   state.editTool = tool;
   updateEditToolUI();
+  drawSgfPreview(state.stones, state.boardSize);
 }
 
 function propertyForColor(color) {
@@ -299,9 +301,11 @@ function drawSgfPreview(stones = state.stones, n = state.boardSize) {
   }
 
   const stoneRadius = Math.max(3, step * 0.44);
+  const occupied = new Map();
   for (const stone of stones) {
     const x = margin + stone.col * step;
     const y = margin + stone.row * step;
+    occupied.set(`${stone.row},${stone.col}`, stone.color);
 
     ctx.beginPath();
     ctx.arc(x, y, stoneRadius, 0, Math.PI * 2);
@@ -316,6 +320,40 @@ function drawSgfPreview(stones = state.stones, n = state.boardSize) {
       ctx.fill();
       ctx.strokeStyle = "rgba(0, 0, 0, 0.38)";
       ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  if (state.hoverPoint) {
+    const hx = margin + state.hoverPoint.col * step;
+    const hy = margin + state.hoverPoint.row * step;
+    const key = `${state.hoverPoint.row},${state.hoverPoint.col}`;
+    const hasStone = occupied.has(key);
+
+    if (state.editTool === "erase" && hasStone) {
+      const xSize = Math.max(5, stoneRadius * 0.65);
+      ctx.strokeStyle = "rgba(189, 27, 27, 0.9)";
+      ctx.lineWidth = Math.max(1.8, step * 0.08);
+      ctx.beginPath();
+      ctx.moveTo(hx - xSize, hy - xSize);
+      ctx.lineTo(hx + xSize, hy + xSize);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(hx + xSize, hy - xSize);
+      ctx.lineTo(hx - xSize, hy + xSize);
+      ctx.stroke();
+    } else if (state.editTool === "black" || state.editTool === "white") {
+      ctx.beginPath();
+      ctx.arc(hx, hy, stoneRadius, 0, Math.PI * 2);
+      if (state.editTool === "black") {
+        ctx.fillStyle = "rgba(17, 17, 17, 0.32)";
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.38)";
+      } else {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.52)";
+        ctx.strokeStyle = "rgba(40, 40, 40, 0.46)";
+      }
+      ctx.lineWidth = 1.2;
+      ctx.fill();
       ctx.stroke();
     }
   }
@@ -1305,6 +1343,7 @@ function resetStateForNewImage() {
   state.shiftY = 0;
   state.rotation = 0;
   state.manualEdits = {};
+  state.hoverPoint = null;
   state.puzzleVisibleCols = 0;
   state.puzzleVisibleRows = 0;
   state.detectedPuzzleGrid = null;
@@ -1485,6 +1524,7 @@ resetCornersBtn.addEventListener("click", () => {
   state.shiftY = 0;
   state.rotation = 0;
   state.manualEdits = {};
+  state.hoverPoint = null;
   state.puzzleVisibleCols = 0;
   state.puzzleVisibleRows = 0;
   state.detectedPuzzleGrid = null;
@@ -1548,6 +1588,15 @@ sgfPreviewCanvas.addEventListener("click", (event) => {
     state.manualEdits[key] = state.editTool;
   }
   applyPositionMapping();
+});
+sgfPreviewCanvas.addEventListener("mousemove", (event) => {
+  if (!state.warpedImageData) return;
+  state.hoverPoint = getPreviewBoardPoint(event);
+  drawSgfPreview(state.stones, state.boardSize);
+});
+sgfPreviewCanvas.addEventListener("mouseleave", () => {
+  state.hoverPoint = null;
+  drawSgfPreview(state.stones, state.boardSize);
 });
 shiftUpBtn.addEventListener("click", () => {
   state.shiftY -= 1;
