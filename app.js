@@ -18,6 +18,7 @@ const state = {
   puzzleMode: false,
   puzzleVisibleCols: 0,
   puzzleVisibleRows: 0,
+  detectedPuzzleGrid: null,
   rawStones: [],
   stones: [],
 };
@@ -192,6 +193,53 @@ function clearCanvas(ctx, canvas) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
+function prepareHiDPICanvas(canvas, ctx) {
+  const rect = canvas.getBoundingClientRect();
+  const cssW = Math.max(1, Math.round(rect.width || canvas.clientWidth || 420));
+  const cssH = Math.max(1, Math.round(rect.height || cssW));
+  const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+  const pixelW = Math.round(cssW * dpr);
+  const pixelH = Math.round(cssH * dpr);
+
+  if (canvas.width !== pixelW || canvas.height !== pixelH) {
+    canvas.width = pixelW;
+    canvas.height = pixelH;
+  }
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { width: cssW, height: cssH };
+}
+
+function drawWoodTexture(ctx, width, height) {
+  const base = ctx.createLinearGradient(0, 0, width, height);
+  base.addColorStop(0, "#d6b382");
+  base.addColorStop(0.5, "#caa06d");
+  base.addColorStop(1, "#b98d5b");
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.save();
+  for (let i = 0; i < 42; i += 1) {
+    const y = (i / 42) * height;
+    const wobble = ((i * 97) % 11) - 5;
+    ctx.strokeStyle = i % 2 ? "rgba(88,52,26,0.08)" : "rgba(255,234,193,0.06)";
+    ctx.lineWidth = 1 + (i % 3) * 0.35;
+    ctx.beginPath();
+    ctx.moveTo(0, y + wobble);
+    ctx.bezierCurveTo(width * 0.25, y - wobble, width * 0.75, y + wobble, width, y - wobble);
+    ctx.stroke();
+  }
+
+  for (let i = 0; i < 320; i += 1) {
+    const x = (i * 73) % width;
+    const y = (i * 97) % height;
+    const a = i % 2 ? 0.04 : 0.025;
+    ctx.fillStyle = `rgba(48, 27, 11, ${a})`;
+    ctx.fillRect(x, y, 1, 1);
+  }
+  ctx.restore();
+}
+
 function normalizeRect(rect) {
   const x = Math.min(rect.x1, rect.x2);
   const y = Math.min(rect.y1, rect.y2);
@@ -207,29 +255,29 @@ function updateCropModeUI() {
 function drawSgfPreview(stones = state.stones, n = state.boardSize) {
   const ctx = sgfPreviewCtx;
   const canvas = sgfPreviewCanvas;
-  const size = Math.min(canvas.width, canvas.height);
+  const vp = prepareHiDPICanvas(canvas, ctx);
+  const size = Math.min(vp.width, vp.height);
   const margin = Math.round(size * 0.08);
   const boardArea = size - margin * 2;
   const step = boardArea / (n - 1);
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#dcc298";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, vp.width, vp.height);
+  drawWoodTexture(ctx, vp.width, vp.height);
 
   ctx.save();
-  ctx.translate((canvas.width - size) / 2, (canvas.height - size) / 2);
+  ctx.translate((vp.width - size) / 2, (vp.height - size) / 2);
 
   ctx.strokeStyle = "rgba(26, 20, 14, 0.75)";
   ctx.lineWidth = 1;
   for (let i = 0; i < n; i += 1) {
-    const pos = margin + i * step;
+    const pos = Math.round(margin + i * step) + 0.5;
     ctx.beginPath();
     ctx.moveTo(margin, pos);
-    ctx.lineTo(margin + boardArea, pos);
+    ctx.lineTo(Math.round(margin + boardArea) + 0.5, pos);
     ctx.stroke();
     ctx.beginPath();
     ctx.moveTo(pos, margin);
-    ctx.lineTo(pos, margin + boardArea);
+    ctx.lineTo(pos, Math.round(margin + boardArea) + 0.5);
     ctx.stroke();
   }
 
@@ -570,28 +618,42 @@ function autoDetectCorners() {
   if (bestContour) bestContour.delete();
 }
 
-function drawWarpGrid() {
+function drawWarpGrid(gridOverride = null) {
   if (!state.warpedImageData) return;
 
-  const n = state.boardSize;
   const size = warpCanvas.width;
-  const step = (size - 1) / (n - 1);
+  const n = state.boardSize;
+  const fullStep = (size - 1) / (n - 1);
+
+  const usePuzzleGrid =
+    !!gridOverride &&
+    Number.isFinite(gridOverride.step) &&
+    Number.isFinite(gridOverride.minX) &&
+    Number.isFinite(gridOverride.minY);
+
+  const cols = usePuzzleGrid ? gridOverride.visibleCols : n;
+  const rows = usePuzzleGrid ? gridOverride.visibleRows : n;
+  const step = usePuzzleGrid ? gridOverride.step : fullStep;
+  const originX = usePuzzleGrid ? gridOverride.minX : 0;
+  const originY = usePuzzleGrid ? gridOverride.minY : 0;
 
   warpCtx.save();
   warpCtx.strokeStyle = "rgba(24,24,24,0.65)";
   warpCtx.lineWidth = 1;
 
-  for (let i = 0; i < n; i += 1) {
-    const x = i * step;
+  for (let i = 0; i < cols; i += 1) {
+    const x = originX + i * step;
     warpCtx.beginPath();
-    warpCtx.moveTo(x, 0);
-    warpCtx.lineTo(x, size);
+    warpCtx.moveTo(x, originY);
+    warpCtx.lineTo(x, originY + (rows - 1) * step);
     warpCtx.stroke();
+  }
 
-    const y = i * step;
+  for (let i = 0; i < rows; i += 1) {
+    const y = originY + i * step;
     warpCtx.beginPath();
-    warpCtx.moveTo(0, y);
-    warpCtx.lineTo(size, y);
+    warpCtx.moveTo(originX, y);
+    warpCtx.lineTo(originX + (cols - 1) * step, y);
     warpCtx.stroke();
   }
 
@@ -840,10 +902,22 @@ function estimatePuzzleGrid(circles, imageSize) {
   };
 }
 
+function getActiveWarpGridOverride() {
+  if (!state.puzzleMode || !state.detectedPuzzleGrid) return null;
+  const g = state.detectedPuzzleGrid;
+  const cols = state.puzzleVisibleCols > 0 ? state.puzzleVisibleCols : g.visibleCols;
+  const rows = state.puzzleVisibleRows > 0 ? state.puzzleVisibleRows : g.visibleRows;
+  return {
+    ...g,
+    visibleCols: cols,
+    visibleRows: rows,
+  };
+}
+
 function renderWarpAndStoneMarkers(stones, step) {
   if (!state.warpedImageData) return;
   warpCtx.putImageData(state.warpedImageData, 0, 0);
-  drawWarpGrid();
+  drawWarpGrid(getActiveWarpGridOverride());
 
   warpCtx.save();
   stones.forEach((stone) => {
@@ -995,16 +1069,21 @@ function extractStones() {
       points = grid.points;
       samplingStep = grid.step;
       puzzleInfo = grid;
+      state.detectedPuzzleGrid = grid;
       setPuzzleVisibleGrid(grid.visibleCols, grid.visibleRows);
     } else if (!state.puzzleVisibleCols || !state.puzzleVisibleRows) {
+      state.detectedPuzzleGrid = null;
       setPuzzleVisibleGrid(0, 0);
     }
+  } else {
+    state.detectedPuzzleGrid = null;
   }
 
   if (!points.length) {
     state.manualEdits = {};
     state.rawStones = [];
     state.stones = [];
+    state.detectedPuzzleGrid = null;
     renderWarpAndStoneMarkers([], boardStep);
     renderStoneTable([]);
     drawSgfPreview([], n);
@@ -1160,6 +1239,7 @@ function resetStateForNewImage() {
   state.manualEdits = {};
   state.puzzleVisibleCols = 0;
   state.puzzleVisibleRows = 0;
+  state.detectedPuzzleGrid = null;
   state.rawStones = [];
   state.stones = [];
   state.warpedImageData = null;
@@ -1339,6 +1419,7 @@ resetCornersBtn.addEventListener("click", () => {
   state.manualEdits = {};
   state.puzzleVisibleCols = 0;
   state.puzzleVisibleRows = 0;
+  state.detectedPuzzleGrid = null;
   state.rawStones = [];
   state.stones = [];
   state.warpedImageData = null;
