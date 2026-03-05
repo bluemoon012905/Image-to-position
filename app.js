@@ -952,11 +952,12 @@ function mapLocalToBoard(localCol, localRow, ctx) {
 function mapBoardToLocal(col, row, ctx) {
   const rotatedCol = col - ctx.offsetCol - ctx.shiftX;
   const rotatedRow = row - ctx.offsetRow - ctx.shiftY;
+  const buffer = ctx.n;
   if (
-    rotatedCol < 0 ||
-    rotatedRow < 0 ||
-    rotatedCol > ctx.rotatedSpanCol - 1 ||
-    rotatedRow > ctx.rotatedSpanRow - 1
+    rotatedCol < -buffer ||
+    rotatedRow < -buffer ||
+    rotatedCol > ctx.rotatedSpanCol - 1 + buffer ||
+    rotatedRow > ctx.rotatedSpanRow - 1 + buffer
   ) {
     return null;
   }
@@ -974,9 +975,6 @@ function mapBoardToLocal(col, row, ctx) {
     localRow = rotatedCol;
   }
 
-  if (localCol < 0 || localRow < 0 || localCol > ctx.spanCol - 1 || localRow > ctx.spanRow - 1) {
-    return null;
-  }
   return { col: localCol, row: localRow };
 }
 
