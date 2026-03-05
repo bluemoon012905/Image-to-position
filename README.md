@@ -26,7 +26,7 @@ Open: `http://localhost:8080`
 
 ## Notes
 
-- Corner auto-detect uses OpenCV.js in the browser.
+- Corner auto-detect and stone-circle detection use OpenCV.js in the browser.
 - You can import with file upload or by pasting an image into the paste box.
 - You can crop after upload/paste using `Crop mode` -> drag box -> `Apply crop`.
 - Step 3 includes a visual SGF preview board before download.

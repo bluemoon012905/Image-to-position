@@ -548,6 +548,92 @@ function estimateStoneRadius(imgData, cx, cy, step, color) {
   return Number(Math.sqrt(count / Math.PI).toFixed(2));
 }
 
+function detectCircleCandidates(step) {
+  const src = cv.imread(warpCanvas);
+  const gray = new cv.Mat();
+  const blur = new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.medianBlur(gray, blur, 5);
+
+  const all = [];
+  const minDist = Math.max(8, step * 0.72);
+  const minR = Math.max(3, Math.floor(step * 0.2));
+  const maxR = Math.max(minR + 2, Math.floor(step * 0.74));
+  const param1 = 110;
+
+  for (const param2 of [12, 14, 16, 18, 20, 22, 24]) {
+    const circles = new cv.Mat();
+    cv.HoughCircles(
+      blur,
+      circles,
+      cv.HOUGH_GRADIENT,
+      1.2,
+      minDist,
+      param1,
+      param2,
+      minR,
+      maxR
+    );
+
+    for (let i = 0; i < circles.cols; i += 1) {
+      const x = circles.data32F[i * 3];
+      const y = circles.data32F[i * 3 + 1];
+      const r = circles.data32F[i * 3 + 2];
+      all.push({ x, y, r });
+    }
+    circles.delete();
+  }
+
+  src.delete();
+  gray.delete();
+  blur.delete();
+
+  const merged = [];
+  for (const c of all) {
+    const existing = merged.find((m) => Math.hypot(m.x - c.x, m.y - c.y) <= step * 0.3);
+    if (!existing) {
+      merged.push({ ...c });
+      continue;
+    }
+
+    existing.x = (existing.x + c.x) / 2;
+    existing.y = (existing.y + c.y) / 2;
+    existing.r = (existing.r + c.r) / 2;
+  }
+
+  return merged;
+}
+
+function circlesToIntersections(circles, n, step) {
+  const bestByPoint = new Map();
+
+  for (const circle of circles) {
+    const col = Math.round(circle.x / step);
+    const row = Math.round(circle.y / step);
+    if (col < 0 || row < 0 || col >= n || row >= n) continue;
+
+    const gx = col * step;
+    const gy = row * step;
+    const dist = Math.hypot(circle.x - gx, circle.y - gy);
+    if (dist > step * 0.43) continue;
+
+    const key = `${row},${col}`;
+    const prev = bestByPoint.get(key);
+    if (!prev || dist < prev.dist) {
+      bestByPoint.set(key, {
+        row,
+        col,
+        x: gx,
+        y: gy,
+        dist,
+        r: circle.r,
+      });
+    }
+  }
+
+  return [...bestByPoint.values()];
+}
+
 function renderWarpAndStoneMarkers(stones, step) {
   if (!state.warpedImageData) return;
   warpCtx.putImageData(state.warpedImageData, 0, 0);
@@ -716,67 +802,34 @@ function extractStones() {
   const n = state.boardSize;
   const size = warpCanvas.width;
   const step = (size - 1) / (n - 1);
-  const rCenter = Math.max(2, step * 0.32);
-  const rRingInner = step * 0.42;
-  const rRingOuter = step * 0.66;
-
-  const points = [];
-
-  for (let row = 0; row < n; row += 1) {
-    for (let col = 0; col < n; col += 1) {
-      const x = col * step;
-      const y = row * step;
-
-      const centerMean = sampleCircleStats(state.warpedImageData, x, y, 0, rCenter);
-      const ringMean = sampleCircleStats(state.warpedImageData, x, y, rRingInner, rRingOuter);
-      const delta = ringMean - centerMean;
-
-      points.push({
-        x,
-        y,
-        row,
-        col,
-        delta: Number(delta.toFixed(2)),
-      });
-    }
+  const circleCandidates = detectCircleCandidates(step);
+  const points = circlesToIntersections(circleCandidates, n, step);
+  if (!points.length) {
+    state.rawStones = [];
+    state.stones = [];
+    state.sizeBuckets = [];
+    fillSizeBucketSelect([]);
+    renderWarpAndStoneMarkers([], step);
+    renderStoneTable([]);
+    drawSgfPreview([], n);
+    setStatus(extractStatus, "No circles detected on intersections. Try crop, corner box, or different image.");
+    return;
   }
 
-  let bestBlackThreshold = 10;
-  let bestWhiteThreshold = 10;
-  let bestCount = -1;
-  let bestBlackCount = 0;
-  let bestWhiteCount = 0;
-
-  for (let blackThreshold = 10; blackThreshold <= 90; blackThreshold += 1) {
-    for (let whiteThreshold = 10; whiteThreshold <= 90; whiteThreshold += 1) {
-      let stoneCount = 0;
-      let blackCount = 0;
-      let whiteCount = 0;
-
-      for (const point of points) {
-        const result = classifyStone(point.delta, blackThreshold, whiteThreshold);
-        if (result.color !== "empty") {
-          stoneCount += 1;
-          if (result.color === "black") blackCount += 1;
-          if (result.color === "white") whiteCount += 1;
-        }
-      }
-
-      if (stoneCount > bestCount) {
-        bestCount = stoneCount;
-        bestBlackThreshold = blackThreshold;
-        bestWhiteThreshold = whiteThreshold;
-        bestBlackCount = blackCount;
-        bestWhiteCount = whiteCount;
-      }
-    }
-  }
+  const blackThreshold = Number(blackThresholdInput.value);
+  const whiteThreshold = Number(whiteThresholdInput.value);
+  const rCenter = Math.max(2, step * 0.34);
+  const rRingInner = step * 0.48;
+  const rRingOuter = step * 0.72;
 
   const stones = [];
   for (const point of points) {
-    const result = classifyStone(point.delta, bestBlackThreshold, bestWhiteThreshold);
+    const centerMean = sampleCircleStats(state.warpedImageData, point.x, point.y, 0, rCenter);
+    const ringMean = sampleCircleStats(state.warpedImageData, point.x, point.y, rRingInner, rRingOuter);
+    const delta = Number((ringMean - centerMean).toFixed(2));
+    const result = classifyStone(delta, blackThreshold, whiteThreshold);
     if (result.color === "empty") continue;
-    const radius = estimateStoneRadius(state.warpedImageData, point.x, point.y, step, result.color);
+    const radius = point.r || estimateStoneRadius(state.warpedImageData, point.x, point.y, step, result.color);
 
     stones.push({
       property: result.property,
@@ -786,21 +839,29 @@ function extractStones() {
       col: point.col,
       row: point.row,
       coord: pointToSgfCoord(point.col, point.row, n),
-      delta: point.delta,
-      radius,
+      delta,
+      radius: Number(radius.toFixed(2)),
     });
   }
 
-  blackThresholdInput.value = String(bestBlackThreshold);
-  whiteThresholdInput.value = String(bestWhiteThreshold);
   state.rawStones = stones;
   state.sizeBuckets = buildSizeBuckets(stones, step);
   fillSizeBucketSelect(state.sizeBuckets);
-  applySizeFilter();
+  if (stones.length) {
+    applySizeFilter();
+  } else {
+    state.stones = [];
+    renderWarpAndStoneMarkers([], step);
+    renderStoneTable([]);
+    drawSgfPreview([], n);
+    setStatus(extractStatus, "Circles were found, but none passed black/white classification thresholds.");
+  }
 
+  const blackCount = stones.filter((s) => s.color === "black").length;
+  const whiteCount = stones.filter((s) => s.color === "white").length;
   setStatus(
     sgfStatus,
-    `Raw scan complete: ${stones.length} stones at black=${bestBlackThreshold}, white=${bestWhiteThreshold}. Use size bucket filter to reduce false positives.`
+    `Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white).`
   );
 }
 
