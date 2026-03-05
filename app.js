@@ -14,6 +14,7 @@ const state = {
   shiftY: 0,
   editTool: "erase",
   manualEdits: {},
+  puzzleMode: false,
   rawStones: [],
   stones: [],
 };
@@ -28,6 +29,7 @@ const sgfPreviewCtx = sgfPreviewCanvas.getContext("2d");
 const imageInput = document.getElementById("imageInput");
 const pasteZone = document.getElementById("pasteZone");
 const boardSizeSelect = document.getElementById("boardSizeSelect");
+const puzzleModeSelect = document.getElementById("puzzleModeSelect");
 const autoCornersBtn = document.getElementById("autoCornersBtn");
 const resetCornersBtn = document.getElementById("resetCornersBtn");
 const cropModeBtn = document.getElementById("cropModeBtn");
@@ -90,6 +92,14 @@ function propertyForColor(color) {
   if (color === "black") return "AB";
   if (color === "white") return "AW";
   return "";
+}
+
+function median(values) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) return (sorted[mid - 1] + sorted[mid]) / 2;
+  return sorted[mid];
 }
 
 function applyManualEdits(stones, n) {
@@ -730,6 +740,78 @@ function circlesToIntersections(circles, n, step) {
   return [...bestByPoint.values()];
 }
 
+function estimatePuzzleGrid(circles, imageSize) {
+  if (circles.length < 2) return null;
+
+  const axisDists = [];
+  for (let i = 0; i < circles.length; i += 1) {
+    for (let j = i + 1; j < circles.length; j += 1) {
+      const dx = Math.abs(circles[i].x - circles[j].x);
+      const dy = Math.abs(circles[i].y - circles[j].y);
+      const d = Math.hypot(dx, dy);
+      if (d < 4 || d > imageSize * 0.35) continue;
+      if (dy < dx * 0.45) axisDists.push(dx);
+      if (dx < dy * 0.45) axisDists.push(dy);
+    }
+  }
+
+  let step = median(axisDists.filter((d) => d > 4));
+  if (!step) {
+    const nn = [];
+    for (let i = 0; i < circles.length; i += 1) {
+      let best = Infinity;
+      for (let j = 0; j < circles.length; j += 1) {
+        if (i === j) continue;
+        const d = Math.hypot(circles[i].x - circles[j].x, circles[i].y - circles[j].y);
+        if (d > 3 && d < best) best = d;
+      }
+      if (Number.isFinite(best)) nn.push(best);
+    }
+    step = median(nn);
+  }
+
+  if (!step || step < 6) return null;
+
+  const minX = Math.min(...circles.map((c) => c.x));
+  const maxX = Math.max(...circles.map((c) => c.x));
+  const minY = Math.min(...circles.map((c) => c.y));
+  const maxY = Math.max(...circles.map((c) => c.y));
+  const visibleCols = Math.max(2, Math.round((maxX - minX) / step) + 1);
+  const visibleRows = Math.max(2, Math.round((maxY - minY) / step) + 1);
+
+  const bestByPoint = new Map();
+  for (const circle of circles) {
+    const col = Math.round((circle.x - minX) / step);
+    const row = Math.round((circle.y - minY) / step);
+    if (col < 0 || row < 0) continue;
+
+    const gx = minX + col * step;
+    const gy = minY + row * step;
+    const dist = Math.hypot(circle.x - gx, circle.y - gy);
+    if (dist > step * 0.45) continue;
+
+    const key = `${row},${col}`;
+    const prev = bestByPoint.get(key);
+    if (!prev || dist < prev.dist) {
+      bestByPoint.set(key, {
+        row,
+        col,
+        x: gx,
+        y: gy,
+        dist,
+        r: circle.r,
+      });
+    }
+  }
+
+  return {
+    step,
+    visibleCols,
+    visibleRows,
+    points: [...bestByPoint.values()],
+  };
+}
+
 function renderWarpAndStoneMarkers(stones, step) {
   if (!state.warpedImageData) return;
   warpCtx.putImageData(state.warpedImageData, 0, 0);
@@ -737,8 +819,8 @@ function renderWarpAndStoneMarkers(stones, step) {
 
   warpCtx.save();
   stones.forEach((stone) => {
-    const x = (stone.imgCol ?? stone.col) * step;
-    const y = (stone.imgRow ?? stone.row) * step;
+    const x = Number.isFinite(stone.imgX) ? stone.imgX : (stone.imgCol ?? stone.col) * step;
+    const y = Number.isFinite(stone.imgY) ? stone.imgY : (stone.imgRow ?? stone.row) * step;
     warpCtx.beginPath();
     warpCtx.arc(x, y, Math.max(3, step * 0.16), 0, Math.PI * 2);
     warpCtx.fillStyle = stone.color === "black" ? "rgba(13,13,13,0.78)" : "rgba(255,255,255,0.9)";
@@ -851,14 +933,26 @@ function extractStones() {
 
   const n = state.boardSize;
   const size = warpCanvas.width;
-  const step = (size - 1) / (n - 1);
-  const circleCandidates = detectCircleCandidates(step);
-  const points = circlesToIntersections(circleCandidates, n, step);
+  const boardStep = (size - 1) / (n - 1);
+  const circleCandidates = detectCircleCandidates(boardStep);
+  let points = circlesToIntersections(circleCandidates, n, boardStep);
+  let samplingStep = boardStep;
+  let puzzleInfo = null;
+
+  if (state.puzzleMode) {
+    const grid = estimatePuzzleGrid(circleCandidates, size);
+    if (grid && grid.points.length) {
+      points = grid.points;
+      samplingStep = grid.step;
+      puzzleInfo = grid;
+    }
+  }
+
   if (!points.length) {
     state.manualEdits = {};
     state.rawStones = [];
     state.stones = [];
-    renderWarpAndStoneMarkers([], step);
+    renderWarpAndStoneMarkers([], boardStep);
     renderStoneTable([]);
     drawSgfPreview([], n);
     setStatus(extractStatus, "No circles detected on intersections. Try crop, corner box, or different image.");
@@ -867,9 +961,9 @@ function extractStones() {
 
   const blackThreshold = Number(blackThresholdInput.value);
   const whiteThreshold = Number(whiteThresholdInput.value);
-  const rCenter = Math.max(2, step * 0.34);
-  const rRingInner = step * 0.48;
-  const rRingOuter = step * 0.72;
+  const rCenter = Math.max(2, samplingStep * 0.34);
+  const rRingInner = samplingStep * 0.48;
+  const rRingOuter = samplingStep * 0.72;
 
   const stones = [];
   for (const point of points) {
@@ -878,13 +972,15 @@ function extractStones() {
     const delta = Number((ringMean - centerMean).toFixed(2));
     const result = classifyStone(delta, blackThreshold, whiteThreshold);
     if (result.color === "empty") continue;
-    const radius = point.r || estimateStoneRadius(state.warpedImageData, point.x, point.y, step, result.color);
+    const radius = point.r || estimateStoneRadius(state.warpedImageData, point.x, point.y, samplingStep, result.color);
 
     stones.push({
       property: result.property,
       color: result.color,
       imgCol: point.col,
       imgRow: point.row,
+      imgX: point.x,
+      imgY: point.y,
       col: point.col,
       row: point.row,
       coord: pointToSgfCoord(point.col, point.row, n),
@@ -899,7 +995,7 @@ function extractStones() {
     applyPositionMapping();
   } else {
     state.stones = [];
-    renderWarpAndStoneMarkers([], step);
+    renderWarpAndStoneMarkers([], boardStep);
     renderStoneTable([]);
     drawSgfPreview([], n);
     setStatus(extractStatus, "Circles were found, but none passed black/white classification thresholds.");
@@ -907,9 +1003,13 @@ function extractStones() {
 
   const blackCount = stones.filter((s) => s.color === "black").length;
   const whiteCount = stones.filter((s) => s.color === "white").length;
+  const puzzleText =
+    state.puzzleMode && puzzleInfo
+      ? ` Puzzle grid estimate: ~${puzzleInfo.visibleCols}x${puzzleInfo.visibleRows} visible intersections.`
+      : "";
   setStatus(
     sgfStatus,
-    `Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white).`
+    `Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white).${puzzleText}`
   );
 }
 
@@ -1075,6 +1175,12 @@ pasteZone.addEventListener("paste", (event) => {
 boardSizeSelect.addEventListener("change", () => {
   state.boardSize = Number(boardSizeSelect.value);
   setStatus(extractStatus, `Board size set to ${state.boardSize}x${state.boardSize}. Re-extract after changes.`);
+});
+
+puzzleModeSelect.addEventListener("change", () => {
+  state.puzzleMode = puzzleModeSelect.value === "on";
+  const modeText = state.puzzleMode ? "ON (partial-board grid estimate enabled)" : "OFF";
+  setStatus(extractStatus, `Puzzle mode ${modeText}. Re-extract to apply.`);
 });
 
 sourceCanvas.addEventListener("click", (event) => {
