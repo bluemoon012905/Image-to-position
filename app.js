@@ -38,6 +38,8 @@ const cropModeBtn = document.getElementById("cropModeBtn");
 const applyCropBtn = document.getElementById("applyCropBtn");
 const cancelCropBtn = document.getElementById("cancelCropBtn");
 const extractBtn = document.getElementById("extractBtn");
+const blackThresholdInput = document.getElementById("blackThresholdInput");
+const whiteThresholdInput = document.getElementById("whiteThresholdInput");
 const generateBtn = document.getElementById("generateBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 
@@ -1079,8 +1081,8 @@ function extractStones() {
     return;
   }
 
-  const blackThreshold = DEFAULT_BLACK_THRESHOLD;
-  const whiteThreshold = DEFAULT_WHITE_THRESHOLD;
+  const blackThreshold = Math.max(1, Number(blackThresholdInput.value) || DEFAULT_BLACK_THRESHOLD);
+  const whiteThreshold = Math.max(1, Number(whiteThresholdInput.value) || DEFAULT_WHITE_THRESHOLD);
   const rCenter = Math.max(2, samplingStep * 0.34);
   const rRingInner = samplingStep * 0.48;
   const rRingOuter = samplingStep * 0.72;
@@ -1132,7 +1134,7 @@ function extractStones() {
       : "";
   setStatus(
     sgfStatus,
-    `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white).`
+    `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Thresholds: B=${blackThreshold}, W=${whiteThreshold}.`
   );
 }
 
@@ -1301,6 +1303,16 @@ pasteZone.addEventListener("paste", (event) => {
 boardSizeSelect.addEventListener("change", () => {
   state.boardSize = Number(boardSizeSelect.value);
   setStatus(extractStatus, `Board size set to ${state.boardSize}x${state.boardSize}. Re-extract after changes.`);
+});
+blackThresholdInput.addEventListener("change", () => {
+  const val = Math.max(1, Number(blackThresholdInput.value) || DEFAULT_BLACK_THRESHOLD);
+  blackThresholdInput.value = String(val);
+  setStatus(extractStatus, `Black threshold set to ${val}. Re-extract to apply.`);
+});
+whiteThresholdInput.addEventListener("change", () => {
+  const val = Math.max(1, Number(whiteThresholdInput.value) || DEFAULT_WHITE_THRESHOLD);
+  whiteThresholdInput.value = String(val);
+  setStatus(extractStatus, `White threshold set to ${val}. Re-extract to apply.`);
 });
 
 sourceCanvas.addEventListener("click", (event) => {
@@ -1488,3 +1500,5 @@ drawSgfPreview([], state.boardSize);
 updateCropModeUI();
 updateShiftLabel();
 updateEditToolUI();
+blackThresholdInput.value = String(DEFAULT_BLACK_THRESHOLD);
+whiteThresholdInput.value = String(DEFAULT_WHITE_THRESHOLD);
