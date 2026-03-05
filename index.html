@@ -37,23 +37,6 @@
                 <option value="19" selected>19x19</option>
               </select>
             </label>
-
-            <label>
-              Puzzle mode
-              <select id="puzzleModeSelect">
-                <option value="off" selected>Off</option>
-                <option value="on">On (partial board)</option>
-              </select>
-            </label>
-
-            <label>
-              Line cleanup
-              <select id="preprocessModeSelect">
-                <option value="off" selected>Off</option>
-                <option value="light">Light</option>
-                <option value="strong">Strong</option>
-              </select>
-            </label>
           </div>
 
           <div
@@ -74,7 +57,7 @@
             <button id="cancelCropBtn" type="button" class="ghost">Cancel crop</button>
           </div>
 
-          <p class="hint">If full board edges are visible, click 4 corners (TL, TR, BR, BL). For zoomed snippets, 2 opposite clicks are enough; the tool will box and anchor automatically.</p>
+          <p class="hint">Use full-board images. Click corners in order TL, TR, BR, BL if auto-detect misses.</p>
 
           <canvas id="sourceCanvas" width="900" height="620"></canvas>
           <p id="cornerStatus" class="status">Waiting for image upload.</p>
@@ -85,32 +68,6 @@
 
           <div class="controls-row">
             <button id="extractBtn" type="button">Extract stones</button>
-          </div>
-
-          <div class="controls-row">
-            <label>
-              Board anchor
-              <select id="boardAnchorSelect">
-                <option value="auto" selected>Auto corner</option>
-                <option value="tl">Top-left</option>
-                <option value="tr">Top-right</option>
-                <option value="bl">Bottom-left</option>
-                <option value="br">Bottom-right</option>
-                <option value="center">Center</option>
-              </select>
-            </label>
-          </div>
-
-          <div class="controls-row">
-            <label>
-              Visible cols
-              <input id="puzzleColsInput" type="number" min="2" max="25" value="0" />
-            </label>
-            <label>
-              Visible rows
-              <input id="puzzleRowsInput" type="number" min="2" max="25" value="0" />
-            </label>
-            <p class="status" id="puzzleGridStatus">Detected grid: -</p>
           </div>
 
           <canvas id="warpCanvas" width="620" height="620"></canvas>

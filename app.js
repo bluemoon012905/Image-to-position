@@ -16,11 +16,6 @@ const state = {
   editTool: "erase",
   manualEdits: {},
   hoverPoint: null,
-  puzzleMode: false,
-  preprocessMode: "off",
-  puzzleVisibleCols: 0,
-  puzzleVisibleRows: 0,
-  detectedPuzzleGrid: null,
   mappingContext: null,
   lastDetectionMeta: null,
   rawStones: [],
@@ -37,8 +32,6 @@ const sgfPreviewCtx = sgfPreviewCanvas.getContext("2d");
 const imageInput = document.getElementById("imageInput");
 const pasteZone = document.getElementById("pasteZone");
 const boardSizeSelect = document.getElementById("boardSizeSelect");
-const puzzleModeSelect = document.getElementById("puzzleModeSelect");
-const preprocessModeSelect = document.getElementById("preprocessModeSelect");
 const autoCornersBtn = document.getElementById("autoCornersBtn");
 const resetCornersBtn = document.getElementById("resetCornersBtn");
 const cropModeBtn = document.getElementById("cropModeBtn");
@@ -47,11 +40,6 @@ const cancelCropBtn = document.getElementById("cancelCropBtn");
 const extractBtn = document.getElementById("extractBtn");
 const generateBtn = document.getElementById("generateBtn");
 const downloadBtn = document.getElementById("downloadBtn");
-
-const boardAnchorSelect = document.getElementById("boardAnchorSelect");
-const puzzleColsInput = document.getElementById("puzzleColsInput");
-const puzzleRowsInput = document.getElementById("puzzleRowsInput");
-const puzzleGridStatus = document.getElementById("puzzleGridStatus");
 
 const cornerStatus = document.getElementById("cornerStatus");
 const extractStatus = document.getElementById("extractStatus");
@@ -83,29 +71,6 @@ function updateShiftLabel() {
   if (shiftValue) {
     shiftValue.textContent = `Shift: x=${state.shiftX}, y=${state.shiftY}, rot=${state.rotation * 90}deg`;
   }
-}
-
-function updatePuzzleGridUI() {
-  if (puzzleColsInput) puzzleColsInput.value = String(state.puzzleVisibleCols || 0);
-  if (puzzleRowsInput) puzzleRowsInput.value = String(state.puzzleVisibleRows || 0);
-  if (puzzleGridStatus) {
-    if (state.puzzleVisibleCols > 0 && state.puzzleVisibleRows > 0) {
-      puzzleGridStatus.textContent = `Detected grid: ${state.puzzleVisibleCols} x ${state.puzzleVisibleRows}`;
-    } else {
-      puzzleGridStatus.textContent = "Detected grid: -";
-    }
-  }
-}
-
-function setPuzzleVisibleGrid(cols, rows) {
-  const maxN = Math.max(2, state.boardSize);
-  const c = Number(cols);
-  const r = Number(rows);
-  state.puzzleVisibleCols =
-    Number.isFinite(c) && c >= 2 ? Math.max(2, Math.min(maxN, Math.round(c))) : 0;
-  state.puzzleVisibleRows =
-    Number.isFinite(r) && r >= 2 ? Math.max(2, Math.min(maxN, Math.round(r))) : 0;
-  updatePuzzleGridUI();
 }
 
 function updateEditToolUI() {
@@ -644,116 +609,34 @@ function autoDetectCorners() {
   if (bestContour) bestContour.delete();
 }
 
-function drawWarpGrid(gridOverride = null) {
+function drawWarpGrid() {
   if (!state.warpedImageData) return;
 
-  const size = warpCanvas.width;
   const n = state.boardSize;
-  const fullStep = (size - 1) / (n - 1);
-
-  const usePuzzleGrid =
-    !!gridOverride &&
-    Number.isFinite(gridOverride.step) &&
-    Number.isFinite(gridOverride.minX) &&
-    Number.isFinite(gridOverride.minY);
-
-  const cols = usePuzzleGrid ? gridOverride.visibleCols : n;
-  const rows = usePuzzleGrid ? gridOverride.visibleRows : n;
-  const step = usePuzzleGrid ? gridOverride.step : fullStep;
-  const originX = usePuzzleGrid ? gridOverride.minX : 0;
-  const originY = usePuzzleGrid ? gridOverride.minY : 0;
+  const size = warpCanvas.width;
+  const step = (size - 1) / (n - 1);
 
   warpCtx.save();
   warpCtx.strokeStyle = "rgba(24,24,24,0.65)";
   warpCtx.lineWidth = 1;
 
-  for (let i = 0; i < cols; i += 1) {
-    const x = originX + i * step;
+  for (let i = 0; i < n; i += 1) {
+    const x = i * step;
     warpCtx.beginPath();
-    warpCtx.moveTo(x, originY);
-    warpCtx.lineTo(x, originY + (rows - 1) * step);
+    warpCtx.moveTo(x, 0);
+    warpCtx.lineTo(x, size);
     warpCtx.stroke();
   }
 
-  for (let i = 0; i < rows; i += 1) {
-    const y = originY + i * step;
+  for (let i = 0; i < n; i += 1) {
+    const y = i * step;
     warpCtx.beginPath();
-    warpCtx.moveTo(originX, y);
-    warpCtx.lineTo(originX + (cols - 1) * step, y);
+    warpCtx.moveTo(0, y);
+    warpCtx.lineTo(size, y);
     warpCtx.stroke();
   }
 
   warpCtx.restore();
-}
-
-function buildDetectionGrayMat() {
-  const src = cv.imread(warpCanvas);
-  const gray = new cv.Mat();
-  const denoise = new cv.Mat();
-  const local = new cv.Mat();
-  const bhH = new cv.Mat();
-  const bhV = new cv.Mat();
-  const bh = new cv.Mat();
-  const enhanced = new cv.Mat();
-  const tuned = new cv.Mat();
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-
-  if (state.preprocessMode === "off") {
-    src.delete();
-    denoise.delete();
-    local.delete();
-    bhH.delete();
-    bhV.delete();
-    bh.delete();
-    enhanced.delete();
-    tuned.delete();
-    return gray;
-  }
-
-  const isStrong = state.preprocessMode === "strong";
-  // Preserve edges while removing compression/noise artifacts.
-  cv.bilateralFilter(gray, denoise, isStrong ? 9 : 7, isStrong ? 75 : 55, isStrong ? 75 : 55, cv.BORDER_DEFAULT);
-
-  // Local contrast is more stable than global equalization for mixed lighting.
-  if (typeof cv.createCLAHE === "function") {
-    const clahe = cv.createCLAHE(isStrong ? 3.2 : 2.2, new cv.Size(8, 8));
-    clahe.apply(denoise, local);
-    clahe.delete();
-  } else {
-    cv.equalizeHist(denoise, local);
-  }
-
-  // Boost dark board lines in both horizontal and vertical directions.
-  const kLen = isStrong ? 13 : 9;
-  const kernelH = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kLen, 1));
-  const kernelV = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, kLen));
-  cv.morphologyEx(local, bhH, cv.MORPH_BLACKHAT, kernelH);
-  cv.morphologyEx(local, bhV, cv.MORPH_BLACKHAT, kernelV);
-  cv.addWeighted(bhH, 0.5, bhV, 0.5, 0, bh);
-
-  // Subtract line map from luminance so grid lines appear cleaner/darker.
-  cv.addWeighted(local, 1.0, bh, isStrong ? -1.05 : -0.78, 0, enhanced);
-
-  // Light smoothing after enhancement to avoid crunchy artifacts.
-  if (state.preprocessMode === "strong") {
-    cv.GaussianBlur(enhanced, tuned, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
-    cv.convertScaleAbs(tuned, tuned, 1.05, 1);
-  } else {
-    cv.GaussianBlur(enhanced, tuned, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
-    cv.convertScaleAbs(tuned, tuned, 1.02, 0);
-  }
-
-  kernelH.delete();
-  kernelV.delete();
-  src.delete();
-  gray.delete();
-  denoise.delete();
-  local.delete();
-  bhH.delete();
-  bhV.delete();
-  bh.delete();
-  enhanced.delete();
-  return tuned;
 }
 
 function sampleCircleStats(imgData, cx, cy, rInner, rOuter = rInner) {
@@ -929,7 +812,9 @@ function build19QuadrantRois(step, size) {
 }
 
 function detectCircleCandidates(step) {
-  const detectGray = buildDetectionGrayMat();
+  const src = cv.imread(warpCanvas);
+  const detectGray = new cv.Mat();
+  cv.cvtColor(src, detectGray, cv.COLOR_RGBA2GRAY);
   const size = warpCanvas.width;
   const all = [];
 
@@ -946,6 +831,7 @@ function detectCircleCandidates(step) {
     }
   }
 
+  src.delete();
   detectGray.delete();
   const merged = mergeCircleCandidates(all, step);
   state.lastDetectionMeta = {
@@ -988,162 +874,10 @@ function circlesToIntersections(circles, n, step) {
   return [...bestByPoint.values()];
 }
 
-function estimatePuzzleGrid(circles, imageSize) {
-  if (circles.length < 2) return null;
-
-  const axisDists = [];
-  for (let i = 0; i < circles.length; i += 1) {
-    for (let j = i + 1; j < circles.length; j += 1) {
-      const dx = Math.abs(circles[i].x - circles[j].x);
-      const dy = Math.abs(circles[i].y - circles[j].y);
-      const d = Math.hypot(dx, dy);
-      if (d < 4 || d > imageSize * 0.35) continue;
-      if (dy < dx * 0.45) axisDists.push(dx);
-      if (dx < dy * 0.45) axisDists.push(dy);
-    }
-  }
-
-  let step = median(axisDists.filter((d) => d > 4));
-  if (!step) {
-    const nn = [];
-    for (let i = 0; i < circles.length; i += 1) {
-      let best = Infinity;
-      for (let j = 0; j < circles.length; j += 1) {
-        if (i === j) continue;
-        const d = Math.hypot(circles[i].x - circles[j].x, circles[i].y - circles[j].y);
-        if (d > 3 && d < best) best = d;
-      }
-      if (Number.isFinite(best)) nn.push(best);
-    }
-    step = median(nn);
-  }
-
-  if (!step || step < 6) return null;
-
-  let minX = Math.min(...circles.map((c) => c.x));
-  let maxX = Math.max(...circles.map((c) => c.x));
-  let minY = Math.min(...circles.map((c) => c.y));
-  let maxY = Math.max(...circles.map((c) => c.y));
-  let visibleCols = Math.max(2, Math.round((maxX - minX) / step) + 1);
-  let visibleRows = Math.max(2, Math.round((maxY - minY) / step) + 1);
-
-  // Refine step/origin by snapping circles to coarse bins, then averaging each bin center.
-  const xBins = new Map();
-  const yBins = new Map();
-  for (const c of circles) {
-    const col = Math.round((c.x - minX) / step);
-    const row = Math.round((c.y - minY) / step);
-    if (!xBins.has(col)) xBins.set(col, []);
-    if (!yBins.has(row)) yBins.set(row, []);
-    xBins.get(col).push(c.x);
-    yBins.get(row).push(c.y);
-  }
-  const xCenters = [...xBins.keys()]
-    .sort((a, b) => a - b)
-    .map((k) => median(xBins.get(k)));
-  const yCenters = [...yBins.keys()]
-    .sort((a, b) => a - b)
-    .map((k) => median(yBins.get(k)));
-  const xSteps = [];
-  const ySteps = [];
-  for (let i = 1; i < xCenters.length; i += 1) xSteps.push(xCenters[i] - xCenters[i - 1]);
-  for (let i = 1; i < yCenters.length; i += 1) ySteps.push(yCenters[i] - yCenters[i - 1]);
-  const refined = median([...xSteps, ...ySteps].filter((d) => d > 3));
-  if (refined) step = refined;
-
-  minX = xCenters.length ? xCenters[0] : minX;
-  maxX = xCenters.length ? xCenters[xCenters.length - 1] : maxX;
-  minY = yCenters.length ? yCenters[0] : minY;
-  maxY = yCenters.length ? yCenters[yCenters.length - 1] : maxY;
-  visibleCols = Math.max(2, xCenters.length || Math.round((maxX - minX) / step) + 1);
-  visibleRows = Math.max(2, yCenters.length || Math.round((maxY - minY) / step) + 1);
-
-  const bestByPoint = new Map();
-  for (const circle of circles) {
-    const col = Math.round((circle.x - minX) / step);
-    const row = Math.round((circle.y - minY) / step);
-    if (col < 0 || row < 0) continue;
-
-    const gx = minX + col * step;
-    const gy = minY + row * step;
-    const dist = Math.hypot(circle.x - gx, circle.y - gy);
-    if (dist > step * 0.45) continue;
-
-    const key = `${row},${col}`;
-    const prev = bestByPoint.get(key);
-    if (!prev || dist < prev.dist) {
-      bestByPoint.set(key, {
-        row,
-        col,
-        x: gx,
-        y: gy,
-        dist,
-        r: circle.r,
-      });
-    }
-  }
-
-  return {
-    step,
-    minX,
-    minY,
-    maxX,
-    maxY,
-    visibleCols,
-    visibleRows,
-    points: [...bestByPoint.values()],
-  };
-}
-
-function getActiveWarpGridOverride() {
-  if (!state.puzzleMode) return null;
-
-  let g = state.detectedPuzzleGrid;
-  if (!g && state.rawStones.length) {
-    const xs = state.rawStones.map((s) => s.imgX).filter((v) => Number.isFinite(v));
-    const ys = state.rawStones.map((s) => s.imgY).filter((v) => Number.isFinite(v));
-    if (xs.length >= 2 && ys.length >= 2) {
-      const xSorted = [...new Set(xs.map((v) => Math.round(v)))].sort((a, b) => a - b);
-      const ySorted = [...new Set(ys.map((v) => Math.round(v)))].sort((a, b) => a - b);
-      const dx = [];
-      const dy = [];
-      for (let i = 1; i < xSorted.length; i += 1) {
-        const d = xSorted[i] - xSorted[i - 1];
-        if (d > 3) dx.push(d);
-      }
-      for (let i = 1; i < ySorted.length; i += 1) {
-        const d = ySorted[i] - ySorted[i - 1];
-        if (d > 3) dy.push(d);
-      }
-      const step = median([...dx, ...dy]);
-      if (step) {
-        g = {
-          minX: Math.min(...xs),
-          minY: Math.min(...ys),
-          maxX: Math.max(...xs),
-          maxY: Math.max(...ys),
-          step,
-          visibleCols: Math.max(2, Math.round((Math.max(...xs) - Math.min(...xs)) / step) + 1),
-          visibleRows: Math.max(2, Math.round((Math.max(...ys) - Math.min(...ys)) / step) + 1),
-        };
-      }
-    }
-  }
-
-  if (!g) return null;
-  const cols = state.puzzleVisibleCols > 0 ? state.puzzleVisibleCols : g.visibleCols;
-  const rows = state.puzzleVisibleRows > 0 ? state.puzzleVisibleRows : g.visibleRows;
-  return {
-    ...g,
-    visibleCols: cols,
-    visibleRows: rows,
-  };
-}
-
 function renderWarpAndStoneMarkers(stones, step) {
   if (!state.warpedImageData) return;
   warpCtx.putImageData(state.warpedImageData, 0, 0);
-  drawWarpGrid(getActiveWarpGridOverride());
+  drawWarpGrid();
 
   warpCtx.save();
   stones.forEach((stone) => {
@@ -1164,33 +898,7 @@ function renderStoneTable(stones) {
   void stones;
 }
 
-function resolveAutoAnchor() {
-  const m = state.drawMeta;
-  const corners = state.activeCorners;
-  if (!m || !corners || corners.length !== 4) return "center";
-
-  const cx = corners.reduce((acc, p) => acc + p.x, 0) / 4;
-  const cy = corners.reduce((acc, p) => acc + p.y, 0) / 4;
-  const midX = m.offsetX + m.drawW / 2;
-  const midY = m.offsetY + m.drawH / 2;
-  const nx = (cx - midX) / m.drawW;
-  const ny = (cy - midY) / m.drawH;
-
-  if (Math.abs(nx) < 0.1 && Math.abs(ny) < 0.1) return "center";
-  if (nx <= 0 && ny <= 0) return "tl";
-  if (nx > 0 && ny <= 0) return "tr";
-  if (nx <= 0 && ny > 0) return "bl";
-  return "br";
-}
-
-function remapStonesToAnchor(stones, n, anchorMode) {
-  if (!stones.length) return [];
-  const ctx = getMappingContext(stones, n, anchorMode);
-  return remapStonesWithContext(stones, n, ctx);
-}
-
-function getMappingContext(stones, n, anchorMode) {
-  const anchor = anchorMode === "auto" ? resolveAutoAnchor() : anchorMode;
+function getMappingContext(stones, n) {
   const cols = stones.map((s) => s.imgCol ?? s.col);
   const rows = stones.map((s) => s.imgRow ?? s.row);
   let minCol = Math.min(...cols);
@@ -1200,25 +908,12 @@ function getMappingContext(stones, n, anchorMode) {
   let spanCol = Math.max(1, maxCol - minCol + 1);
   let spanRow = Math.max(1, maxRow - minRow + 1);
 
-  if (state.puzzleMode && state.puzzleVisibleCols > 0 && state.puzzleVisibleRows > 0) {
-    minCol = 0;
-    minRow = 0;
-    spanCol = state.puzzleVisibleCols;
-    spanRow = state.puzzleVisibleRows;
-  }
-
   const rot = ((state.rotation % 4) + 4) % 4;
   const rotatedSpanCol = rot % 2 === 0 ? spanCol : spanRow;
   const rotatedSpanRow = rot % 2 === 0 ? spanRow : spanCol;
 
-  let offsetCol = 0;
-  let offsetRow = 0;
-  if (anchor === "tr" || anchor === "br") offsetCol = Math.max(0, n - rotatedSpanCol);
-  if (anchor === "bl" || anchor === "br") offsetRow = Math.max(0, n - rotatedSpanRow);
-  if (anchor === "center") {
-    offsetCol = Math.max(0, Math.floor((n - rotatedSpanCol) / 2));
-    offsetRow = Math.max(0, Math.floor((n - rotatedSpanRow) / 2));
-  }
+  const offsetCol = Math.max(0, Math.floor((n - rotatedSpanCol) / 2));
+  const offsetRow = Math.max(0, Math.floor((n - rotatedSpanRow) / 2));
 
   return {
     n,
@@ -1314,7 +1009,7 @@ function applyPositionMapping() {
   const n = state.boardSize;
   const size = warpCanvas.width;
   const step = (size - 1) / (n - 1);
-  const ctx = getMappingContext(state.rawStones, n, boardAnchorSelect.value);
+  const ctx = getMappingContext(state.rawStones, n);
   state.mappingContext = ctx;
   const mapped = remapStonesWithContext(state.rawStones, n, ctx);
   const edited = applyManualEdits(mapped, n);
@@ -1354,11 +1049,10 @@ function applyPositionMapping() {
 
   const blackCount = mergedEdited.filter((s) => s.color === "black").length;
   const whiteCount = mergedEdited.filter((s) => s.color === "white").length;
-  const anchorResolved = boardAnchorSelect.value === "auto" ? resolveAutoAnchor() : boardAnchorSelect.value;
   updateShiftLabel();
   setStatus(
     extractStatus,
-    `Showing ${mergedEdited.length} stones (${blackCount} black, ${whiteCount} white), anchor=${anchorResolved}, shift=(${state.shiftX},${state.shiftY}), rot=${state.rotation * 90}deg.`
+    `Showing ${mergedEdited.length} stones (${blackCount} black, ${whiteCount} white), shift=(${state.shiftX},${state.shiftY}), rot=${state.rotation * 90}deg.`
   );
 }
 
@@ -1373,31 +1067,13 @@ function extractStones() {
   const size = warpCanvas.width;
   const boardStep = (size - 1) / (n - 1);
   const circleCandidates = detectCircleCandidates(boardStep);
-  let points = circlesToIntersections(circleCandidates, n, boardStep);
-  let samplingStep = boardStep;
-  let puzzleInfo = null;
-
-  if (state.puzzleMode) {
-    const grid = estimatePuzzleGrid(circleCandidates, size);
-    if (grid && grid.points.length) {
-      points = grid.points;
-      samplingStep = grid.step;
-      puzzleInfo = grid;
-      state.detectedPuzzleGrid = grid;
-      setPuzzleVisibleGrid(grid.visibleCols, grid.visibleRows);
-    } else if (!state.puzzleVisibleCols || !state.puzzleVisibleRows) {
-      state.detectedPuzzleGrid = null;
-      setPuzzleVisibleGrid(0, 0);
-    }
-  } else {
-    state.detectedPuzzleGrid = null;
-  }
+  const points = circlesToIntersections(circleCandidates, n, boardStep);
+  const samplingStep = boardStep;
 
   if (!points.length) {
     state.manualEdits = {};
     state.rawStones = [];
     state.stones = [];
-    state.detectedPuzzleGrid = null;
     renderWarpAndStoneMarkers([], boardStep);
     renderStoneTable([]);
     drawSgfPreview([], n);
@@ -1436,9 +1112,6 @@ function extractStones() {
   }
 
   state.manualEdits = {};
-  if (!state.puzzleMode) {
-    setPuzzleVisibleGrid(0, 0);
-  }
   state.rawStones = stones;
   if (stones.length) {
     applyPositionMapping();
@@ -1459,13 +1132,9 @@ function extractStones() {
       : det
       ? `Detection: base=${det.baseRaw}, merged=${det.merged}. `
       : "";
-  const puzzleText =
-    state.puzzleMode && puzzleInfo
-      ? ` Puzzle grid estimate: ~${puzzleInfo.visibleCols}x${puzzleInfo.visibleRows} visible intersections.`
-      : "";
   setStatus(
     sgfStatus,
-    `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Cleanup=${state.preprocessMode}.${puzzleText}`
+    `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white).`
   );
 }
 
@@ -1560,9 +1229,6 @@ function resetStateForNewImage() {
   state.rotation = 0;
   state.manualEdits = {};
   state.hoverPoint = null;
-  state.puzzleVisibleCols = 0;
-  state.puzzleVisibleRows = 0;
-  state.detectedPuzzleGrid = null;
   state.mappingContext = null;
   state.rawStones = [];
   state.stones = [];
@@ -1571,12 +1237,11 @@ function resetStateForNewImage() {
   clearCanvas(warpCtx, warpCanvas);
   drawSgfPreview([], state.boardSize);
   sgfOutput.value = "";
-  setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
+  setStatus(extractStatus, "Set 4 corners, then extract stones.");
   setStatus(sgfStatus, "No SGF generated yet.");
   updateCropModeUI();
   updateShiftLabel();
   updateEditToolUI();
-  updatePuzzleGridUI();
 }
 
 function loadImageFromBlob(blob, sourceLabel) {
@@ -1637,38 +1302,7 @@ pasteZone.addEventListener("paste", (event) => {
 
 boardSizeSelect.addEventListener("change", () => {
   state.boardSize = Number(boardSizeSelect.value);
-  puzzleColsInput.max = String(state.boardSize);
-  puzzleRowsInput.max = String(state.boardSize);
-  if (state.puzzleVisibleCols || state.puzzleVisibleRows) {
-    setPuzzleVisibleGrid(state.puzzleVisibleCols, state.puzzleVisibleRows);
-  }
   setStatus(extractStatus, `Board size set to ${state.boardSize}x${state.boardSize}. Re-extract after changes.`);
-});
-
-puzzleModeSelect.addEventListener("change", () => {
-  state.puzzleMode = puzzleModeSelect.value === "on";
-  const modeText = state.puzzleMode ? "ON (partial-board grid estimate enabled)" : "OFF";
-  if (!state.puzzleMode) {
-    setPuzzleVisibleGrid(0, 0);
-  }
-  setStatus(extractStatus, `Puzzle mode ${modeText}. Re-extract to apply.`);
-});
-
-preprocessModeSelect.addEventListener("change", () => {
-  state.preprocessMode = preprocessModeSelect.value;
-  setStatus(extractStatus, `Line cleanup set to ${state.preprocessMode}. Re-extract to apply.`);
-});
-
-puzzleColsInput.addEventListener("change", () => {
-  const cols = Number(puzzleColsInput.value);
-  setPuzzleVisibleGrid(cols, state.puzzleVisibleRows || Number(puzzleRowsInput.value));
-  if (state.puzzleMode && state.rawStones.length) applyPositionMapping();
-});
-
-puzzleRowsInput.addEventListener("change", () => {
-  const rows = Number(puzzleRowsInput.value);
-  setPuzzleVisibleGrid(state.puzzleVisibleCols || Number(puzzleColsInput.value), rows);
-  if (state.puzzleMode && state.rawStones.length) applyPositionMapping();
 });
 
 sourceCanvas.addEventListener("click", (event) => {
@@ -1693,7 +1327,7 @@ sourceCanvas.addEventListener("click", (event) => {
   drawSourceImage();
 
   if (state.corners.length < 4) {
-    setStatus(cornerStatus, `Corner ${state.corners.length} captured. You can continue to 4, or extract now in zoomed/boxed mode.`);
+    setStatus(cornerStatus, `Corner ${state.corners.length} captured. Continue until all 4 corners are set.`);
   } else {
     state.corners = orderedCorners(state.corners);
     drawSourceImage();
@@ -1747,9 +1381,6 @@ resetCornersBtn.addEventListener("click", () => {
   state.rotation = 0;
   state.manualEdits = {};
   state.hoverPoint = null;
-  state.puzzleVisibleCols = 0;
-  state.puzzleVisibleRows = 0;
-  state.detectedPuzzleGrid = null;
   state.mappingContext = null;
   state.rawStones = [];
   state.stones = [];
@@ -1757,9 +1388,8 @@ resetCornersBtn.addEventListener("click", () => {
   drawSourceImage();
   clearCanvas(warpCtx, warpCanvas);
   setStatus(cornerStatus, "Corners reset.");
-  setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
+  setStatus(extractStatus, "Set 4 corners, then extract stones.");
   updateShiftLabel();
-  updatePuzzleGridUI();
 });
 
 cropModeBtn.addEventListener("click", () => {
@@ -1796,7 +1426,6 @@ cancelCropBtn.addEventListener("click", () => {
 });
 
 extractBtn.addEventListener("click", extractStones);
-boardAnchorSelect.addEventListener("change", applyPositionMapping);
 toolBlackBtn.addEventListener("click", () => setEditTool("black"));
 toolWhiteBtn.addEventListener("click", () => setEditTool("white"));
 toolEraseBtn.addEventListener("click", () => setEditTool("erase"));
@@ -1861,6 +1490,3 @@ drawSgfPreview([], state.boardSize);
 updateCropModeUI();
 updateShiftLabel();
 updateEditToolUI();
-puzzleColsInput.max = String(state.boardSize);
-puzzleRowsInput.max = String(state.boardSize);
-updatePuzzleGridUI();
