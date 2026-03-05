@@ -22,6 +22,7 @@ const state = {
   puzzleVisibleRows: 0,
   detectedPuzzleGrid: null,
   mappingContext: null,
+  lastDetectionMeta: null,
   rawStones: [],
   stones: [],
 };
@@ -839,10 +840,18 @@ function estimateStoneRadius(imgData, cx, cy, step, color) {
   return Number(Math.sqrt(count / Math.PI).toFixed(2));
 }
 
-function detectCircleCandidates(step) {
-  const detectGray = buildDetectionGrayMat();
+function detectCircleCandidatesFromGray(grayMat, step, roi = null) {
+  const detectRoi = roi
+    ? new cv.Rect(
+        Math.max(0, Math.floor(roi.x)),
+        Math.max(0, Math.floor(roi.y)),
+        Math.max(1, Math.floor(roi.w)),
+        Math.max(1, Math.floor(roi.h))
+      )
+    : null;
+  const srcView = detectRoi ? grayMat.roi(detectRoi) : grayMat;
   const blur = new cv.Mat();
-  cv.medianBlur(detectGray, blur, 5);
+  cv.medianBlur(srcView, blur, 5);
 
   const all = [];
   const minDist = Math.max(8, step * 0.72);
@@ -865,17 +874,24 @@ function detectCircleCandidates(step) {
     );
 
     for (let i = 0; i < circles.cols; i += 1) {
-      const x = circles.data32F[i * 3];
-      const y = circles.data32F[i * 3 + 1];
+      const ox = detectRoi ? detectRoi.x : 0;
+      const oy = detectRoi ? detectRoi.y : 0;
+      const x = circles.data32F[i * 3] + ox;
+      const y = circles.data32F[i * 3 + 1] + oy;
       const r = circles.data32F[i * 3 + 2];
       all.push({ x, y, r });
     }
     circles.delete();
   }
 
-  detectGray.delete();
+  if (detectRoi) {
+    srcView.delete();
+  }
   blur.delete();
+  return all;
+}
 
+function mergeCircleCandidates(all, step) {
   const merged = [];
   for (const c of all) {
     const existing = merged.find((m) => Math.hypot(m.x - c.x, m.y - c.y) <= step * 0.3);
@@ -888,6 +904,56 @@ function detectCircleCandidates(step) {
     existing.y = (existing.y + c.y) / 2;
     existing.r = (existing.r + c.r) / 2;
   }
+  return merged;
+}
+
+function build19QuadrantRois(step, size) {
+  const pad = step * 1.8;
+  const span = step * 8;
+  const starts = [
+    { col: 0, row: 0 },
+    { col: 10, row: 0 },
+    { col: 0, row: 10 },
+    { col: 10, row: 10 },
+  ];
+
+  return starts.map((s) => {
+    const x0 = s.col * step - pad;
+    const y0 = s.row * step - pad;
+    const x = Math.max(0, x0);
+    const y = Math.max(0, y0);
+    const w = Math.min(size - x, span + pad * 2);
+    const h = Math.min(size - y, span + pad * 2);
+    return { x, y, w, h };
+  });
+}
+
+function detectCircleCandidates(step) {
+  const detectGray = buildDetectionGrayMat();
+  const size = warpCanvas.width;
+  const all = [];
+
+  const base = detectCircleCandidatesFromGray(detectGray, step);
+  all.push(...base);
+
+  let tiledRaw = 0;
+  if (state.boardSize === 19) {
+    const rois = build19QuadrantRois(step, size);
+    for (const roi of rois) {
+      const partial = detectCircleCandidatesFromGray(detectGray, step, roi);
+      tiledRaw += partial.length;
+      all.push(...partial);
+    }
+  }
+
+  detectGray.delete();
+  const merged = mergeCircleCandidates(all, step);
+  state.lastDetectionMeta = {
+    baseRaw: base.length,
+    tiledRaw,
+    merged: merged.length,
+    usedQuadrants: state.boardSize === 19,
+  };
 
   return merged;
 }
@@ -1386,13 +1452,20 @@ function extractStones() {
 
   const blackCount = stones.filter((s) => s.color === "black").length;
   const whiteCount = stones.filter((s) => s.color === "white").length;
+  const det = state.lastDetectionMeta;
+  const detectText =
+    det && det.usedQuadrants
+      ? `Detection: base=${det.baseRaw}, tiled=${det.tiledRaw}, merged=${det.merged}. `
+      : det
+      ? `Detection: base=${det.baseRaw}, merged=${det.merged}. `
+      : "";
   const puzzleText =
     state.puzzleMode && puzzleInfo
       ? ` Puzzle grid estimate: ~${puzzleInfo.visibleCols}x${puzzleInfo.visibleRows} visible intersections.`
       : "";
   setStatus(
     sgfStatus,
-    `Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Cleanup=${state.preprocessMode}.${puzzleText}`
+    `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Cleanup=${state.preprocessMode}.${puzzleText}`
   );
 }
 
