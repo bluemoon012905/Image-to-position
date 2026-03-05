@@ -331,10 +331,17 @@ function pointToSgfCoord(i, j, n) {
   return `${x}${y}`;
 }
 
-function extractStones() {
-  const blackThreshold = Number(blackThresholdInput.value);
-  const whiteThreshold = Number(whiteThresholdInput.value);
+function classifyStone(delta, blackThreshold, whiteThreshold) {
+  if (delta > blackThreshold) {
+    return { color: "black", property: "AB" };
+  }
+  if (-delta > whiteThreshold) {
+    return { color: "white", property: "AW" };
+  }
+  return { color: "empty", property: "" };
+}
 
+function extractStones() {
   const warped = warpBoardFromCorners();
   if (!warped || !state.warpedImageData) {
     setStatus(extractStatus, "Need image + 4 corners + OpenCV ready before extraction.");
@@ -348,8 +355,7 @@ function extractStones() {
   const rRingInner = step * 0.42;
   const rRingOuter = step * 0.66;
 
-  const stones = [];
-  const markers = [];
+  const points = [];
 
   for (let row = 0; row < n; row += 1) {
     for (let col = 0; col < n; col += 1) {
@@ -360,25 +366,67 @@ function extractStones() {
       const ringMean = sampleCircleStats(state.warpedImageData, x, y, rRingInner, rRingOuter);
       const delta = ringMean - centerMean;
 
-      let color = "empty";
-      let property = "";
+      points.push({
+        x,
+        y,
+        row,
+        col,
+        coord: pointToSgfCoord(col, row, n),
+        delta: Number(delta.toFixed(2)),
+      });
+    }
+  }
 
-      if (delta > blackThreshold) {
-        color = "black";
-        property = "AB";
-      } else if (-delta > whiteThreshold) {
-        color = "white";
-        property = "AW";
+  let bestBlackThreshold = 10;
+  let bestWhiteThreshold = 10;
+  let bestCount = -1;
+  let bestBlackCount = 0;
+  let bestWhiteCount = 0;
+
+  for (let blackThreshold = 10; blackThreshold <= 90; blackThreshold += 1) {
+    for (let whiteThreshold = 10; whiteThreshold <= 90; whiteThreshold += 1) {
+      let stoneCount = 0;
+      let blackCount = 0;
+      let whiteCount = 0;
+
+      for (const point of points) {
+        const result = classifyStone(point.delta, blackThreshold, whiteThreshold);
+        if (result.color !== "empty") {
+          stoneCount += 1;
+          if (result.color === "black") blackCount += 1;
+          if (result.color === "white") whiteCount += 1;
+        }
       }
 
-      if (color !== "empty") {
-        const coord = pointToSgfCoord(col, row, n);
-        stones.push({ coord, property, color, col, row, delta: Number(delta.toFixed(2)) });
-        markers.push({ x, y, color });
+      if (stoneCount > bestCount) {
+        bestCount = stoneCount;
+        bestBlackThreshold = blackThreshold;
+        bestWhiteThreshold = whiteThreshold;
+        bestBlackCount = blackCount;
+        bestWhiteCount = whiteCount;
       }
     }
   }
 
+  const stones = [];
+  const markers = [];
+  for (const point of points) {
+    const result = classifyStone(point.delta, bestBlackThreshold, bestWhiteThreshold);
+    if (result.color === "empty") continue;
+
+    stones.push({
+      coord: point.coord,
+      property: result.property,
+      color: result.color,
+      col: point.col,
+      row: point.row,
+      delta: point.delta,
+    });
+    markers.push({ x: point.x, y: point.y, color: result.color });
+  }
+
+  blackThresholdInput.value = String(bestBlackThreshold);
+  whiteThresholdInput.value = String(bestWhiteThreshold);
   state.stones = stones;
 
   warpCtx.putImageData(state.warpedImageData, 0, 0);
@@ -405,7 +453,7 @@ function extractStones() {
 
   setStatus(
     extractStatus,
-    `Extracted ${stones.length} stones on ${n}x${n}. Adjust thresholds if needed and re-run.`
+    `Scanned all threshold pairs (10..90). Best hit: ${stones.length} stones (${bestBlackCount} black, ${bestWhiteCount} white) using black=${bestBlackThreshold}, white=${bestWhiteThreshold}.`
   );
 }
 
