@@ -20,6 +20,7 @@ const state = {
   lastDetectionMeta: null,
   rawStones: [],
   stones: [],
+  extracting: false,
 };
 
 const sourceCanvas = document.getElementById("sourceCanvas");
@@ -41,6 +42,7 @@ const extractBtn = document.getElementById("extractBtn");
 const blackThresholdInput = document.getElementById("blackThresholdInput");
 const whiteThresholdInput = document.getElementById("whiteThresholdInput");
 const autoBalanceCheckbox = document.getElementById("autoBalanceCheckbox");
+const autoBalanceSpinner = document.getElementById("autoBalanceSpinner");
 const generateBtn = document.getElementById("generateBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 
@@ -149,6 +151,16 @@ function getPreviewBoardPoint(event) {
 
 function clearCanvas(ctx, canvas) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function nextFrame() {
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
+function setAutoBalanceBusy(isBusy) {
+  if (autoBalanceSpinner) {
+    autoBalanceSpinner.classList.toggle("hidden", !isBusy);
+  }
 }
 
 function prepareHiDPICanvas(canvas, ctx) {
@@ -1057,10 +1069,13 @@ function applyPositionMapping() {
   );
 }
 
-function extractStones() {
+async function extractStones() {
+  if (state.extracting) return;
+  state.extracting = true;
   const warped = warpBoardFromCorners();
   if (!warped || !state.warpedImageData) {
     setStatus(extractStatus, "Need image + OpenCV ready before extraction.");
+    state.extracting = false;
     return;
   }
 
@@ -1079,6 +1094,7 @@ function extractStones() {
     renderStoneTable([]);
     drawSgfPreview([], n);
     setStatus(extractStatus, "No circles detected on intersections. Try crop, corner box, or different image.");
+    state.extracting = false;
     return;
   }
 
@@ -1117,21 +1133,43 @@ function extractStones() {
     return out;
   }
 
-  let stones = classifyPointsWithThresholds(blackThreshold, whiteThreshold);
+  let stones = [];
   let autoBalanceNote = "";
   if (autoBalance) {
-    const blackCount0 = stones.filter((s) => s.color === "black").length;
-    const whiteCount0 = stones.filter((s) => s.color === "white").length;
+    setAutoBalanceBusy(true);
     const bump = 2;
-    if (blackCount0 > whiteCount0 * 1.2) {
-      blackThreshold = Math.min(80, blackThreshold + bump);
+    const maxLoops = 10;
+    let loops = 0;
+    let balanced = false;
+    await nextFrame();
+    while (loops < maxLoops) {
+      loops += 1;
       stones = classifyPointsWithThresholds(blackThreshold, whiteThreshold);
-      autoBalanceNote = ` Auto-balance bumped black threshold +${bump}.`;
-    } else if (whiteCount0 > blackCount0 * 1.2) {
-      whiteThreshold = Math.min(80, whiteThreshold + bump);
-      stones = classifyPointsWithThresholds(blackThreshold, whiteThreshold);
-      autoBalanceNote = ` Auto-balance bumped white threshold +${bump}.`;
+      const blackCountLoop = stones.filter((s) => s.color === "black").length;
+      const whiteCountLoop = stones.filter((s) => s.color === "white").length;
+      const blackTooHigh = blackCountLoop > whiteCountLoop * 1.2;
+      const whiteTooHigh = whiteCountLoop > blackCountLoop * 1.2;
+      if (!blackTooHigh && !whiteTooHigh) {
+        balanced = true;
+        break;
+      }
+      if (blackTooHigh) {
+        const next = Math.min(80, blackThreshold + bump);
+        if (next === blackThreshold) break;
+        blackThreshold = next;
+      } else if (whiteTooHigh) {
+        const next = Math.min(80, whiteThreshold + bump);
+        if (next === whiteThreshold) break;
+        whiteThreshold = next;
+      }
+      await nextFrame();
     }
+    setAutoBalanceBusy(false);
+    autoBalanceNote = balanced
+      ? ` Auto-balance converged in ${loops} loop${loops === 1 ? "" : "s"}.`
+      : ` Auto-balance stopped after ${loops} loop${loops === 1 ? "" : "s"}.`;
+  } else {
+    stones = classifyPointsWithThresholds(blackThreshold, whiteThreshold);
   }
 
   state.manualEdits = {};
@@ -1159,6 +1197,7 @@ function extractStones() {
     sgfStatus,
     `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Thresholds: B=${blackThreshold}, W=${whiteThreshold}.${autoBalanceNote}`
   );
+  state.extracting = false;
 }
 
 function generateSgf() {
