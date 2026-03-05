@@ -5,6 +5,7 @@ const state = {
   corners: [],
   cvReady: false,
   warpedImageData: null,
+  activeCorners: [],
   rawStones: [],
   stones: [],
   sizeBuckets: [],
@@ -30,6 +31,7 @@ const applySizeFilterBtn = document.getElementById("applySizeFilterBtn");
 const blackThresholdInput = document.getElementById("blackThreshold");
 const whiteThresholdInput = document.getElementById("whiteThreshold");
 const sizeBucketSelect = document.getElementById("sizeBucketSelect");
+const boardAnchorSelect = document.getElementById("boardAnchorSelect");
 
 const cornerStatus = document.getElementById("cornerStatus");
 const extractStatus = document.getElementById("extractStatus");
@@ -203,6 +205,40 @@ function orderedCorners(points) {
   return [tl, tr, br, bl];
 }
 
+function getWorkingCanvasCorners() {
+  if (state.corners.length === 4) {
+    return orderedCorners(state.corners);
+  }
+
+  const m = state.drawMeta;
+  if (!m) return null;
+
+  if (state.corners.length >= 2) {
+    const xs = state.corners.map((p) => p.x);
+    const ys = state.corners.map((p) => p.y);
+    const minX = Math.max(m.offsetX, Math.min(...xs));
+    const maxX = Math.min(m.offsetX + m.drawW, Math.max(...xs));
+    const minY = Math.max(m.offsetY, Math.min(...ys));
+    const maxY = Math.min(m.offsetY + m.drawH, Math.max(...ys));
+
+    if (maxX - minX > 12 && maxY - minY > 12) {
+      return orderedCorners([
+        { x: minX, y: minY },
+        { x: maxX, y: minY },
+        { x: maxX, y: maxY },
+        { x: minX, y: maxY },
+      ]);
+    }
+  }
+
+  return [
+    { x: m.offsetX, y: m.offsetY },
+    { x: m.offsetX + m.drawW, y: m.offsetY },
+    { x: m.offsetX + m.drawW, y: m.offsetY + m.drawH },
+    { x: m.offsetX, y: m.offsetY + m.drawH },
+  ];
+}
+
 function canvasToOriginal(point) {
   const m = state.drawMeta;
   return {
@@ -220,14 +256,19 @@ function originalToCanvas(point) {
 }
 
 function warpBoardFromCorners() {
-  if (!state.image || state.corners.length !== 4 || !state.cvReady) {
+  if (!state.image || !state.cvReady) {
     return false;
   }
 
+  const canvasCorners = getWorkingCanvasCorners();
+  if (!canvasCorners || canvasCorners.length !== 4) {
+    return false;
+  }
+
+  state.activeCorners = canvasCorners;
   const src = cv.imread(state.image);
   const dst = new cv.Mat();
 
-  const canvasCorners = orderedCorners(state.corners);
   const originalCorners = canvasCorners.map(canvasToOriginal);
 
   const srcTri = cv.matFromArray(
@@ -464,8 +505,8 @@ function renderWarpAndStoneMarkers(stones, step) {
 
   warpCtx.save();
   stones.forEach((stone) => {
-    const x = stone.col * step;
-    const y = stone.row * step;
+    const x = (stone.imgCol ?? stone.col) * step;
+    const y = (stone.imgRow ?? stone.row) * step;
     warpCtx.beginPath();
     warpCtx.arc(x, y, Math.max(3, step * 0.16), 0, Math.PI * 2);
     warpCtx.fillStyle = stone.color === "black" ? "rgba(13,13,13,0.78)" : "rgba(255,255,255,0.9)";
@@ -500,6 +541,63 @@ function buildSizeBuckets(stones, step) {
   }
 
   return [...map.values()].sort((a, b) => b.count - a.count);
+}
+
+function resolveAutoAnchor() {
+  const m = state.drawMeta;
+  const corners = state.activeCorners;
+  if (!m || !corners || corners.length !== 4) return "center";
+
+  const cx = corners.reduce((acc, p) => acc + p.x, 0) / 4;
+  const cy = corners.reduce((acc, p) => acc + p.y, 0) / 4;
+  const midX = m.offsetX + m.drawW / 2;
+  const midY = m.offsetY + m.drawH / 2;
+  const nx = (cx - midX) / m.drawW;
+  const ny = (cy - midY) / m.drawH;
+
+  if (Math.abs(nx) < 0.1 && Math.abs(ny) < 0.1) return "center";
+  if (nx <= 0 && ny <= 0) return "tl";
+  if (nx > 0 && ny <= 0) return "tr";
+  if (nx <= 0 && ny > 0) return "bl";
+  return "br";
+}
+
+function remapStonesToAnchor(stones, n, anchorMode) {
+  if (!stones.length) return [];
+  const anchor = anchorMode === "auto" ? resolveAutoAnchor() : anchorMode;
+
+  const cols = stones.map((s) => s.imgCol ?? s.col);
+  const rows = stones.map((s) => s.imgRow ?? s.row);
+  const minCol = Math.min(...cols);
+  const maxCol = Math.max(...cols);
+  const minRow = Math.min(...rows);
+  const maxRow = Math.max(...rows);
+  const spanCol = Math.max(1, maxCol - minCol + 1);
+  const spanRow = Math.max(1, maxRow - minRow + 1);
+
+  let offsetCol = 0;
+  let offsetRow = 0;
+  if (anchor === "tr" || anchor === "br") offsetCol = Math.max(0, n - spanCol);
+  if (anchor === "bl" || anchor === "br") offsetRow = Math.max(0, n - spanRow);
+  if (anchor === "center") {
+    offsetCol = Math.max(0, Math.floor((n - spanCol) / 2));
+    offsetRow = Math.max(0, Math.floor((n - spanRow) / 2));
+  }
+
+  return stones.map((stone) => {
+    const imgCol = stone.imgCol ?? stone.col;
+    const imgRow = stone.imgRow ?? stone.row;
+    const col = Math.max(0, Math.min(n - 1, offsetCol + (imgCol - minCol)));
+    const row = Math.max(0, Math.min(n - 1, offsetRow + (imgRow - minRow)));
+    return {
+      ...stone,
+      imgCol,
+      imgRow,
+      col,
+      row,
+      coord: pointToSgfCoord(col, row, n),
+    };
+  });
 }
 
 function fillSizeBucketSelect(buckets) {
@@ -542,24 +640,26 @@ function applySizeFilter() {
     filtered = state.rawStones.filter((stone) => Math.abs(stone.radius - center) <= tolerance);
   }
 
-  state.stones = filtered;
+  const mapped = remapStonesToAnchor(filtered, n, boardAnchorSelect.value);
+  state.stones = mapped;
   renderWarpAndStoneMarkers(filtered, step);
-  renderStoneTable(filtered);
-  drawSgfPreview(filtered, n);
+  renderStoneTable(mapped);
+  drawSgfPreview(mapped, n);
 
-  const blackCount = filtered.filter((s) => s.color === "black").length;
-  const whiteCount = filtered.filter((s) => s.color === "white").length;
+  const blackCount = mapped.filter((s) => s.color === "black").length;
+  const whiteCount = mapped.filter((s) => s.color === "white").length;
+  const anchorResolved = boardAnchorSelect.value === "auto" ? resolveAutoAnchor() : boardAnchorSelect.value;
   const sizeLabel = selected === "all" ? "all sizes" : `size bucket r~${Number(selected).toFixed(1)}px`;
   setStatus(
     extractStatus,
-    `Showing ${filtered.length} stones (${blackCount} black, ${whiteCount} white) using ${sizeLabel}.`
+    `Showing ${mapped.length} stones (${blackCount} black, ${whiteCount} white) using ${sizeLabel}, anchor=${anchorResolved}.`
   );
 }
 
 function extractStones() {
   const warped = warpBoardFromCorners();
   if (!warped || !state.warpedImageData) {
-    setStatus(extractStatus, "Need image + 4 corners + OpenCV ready before extraction.");
+    setStatus(extractStatus, "Need image + OpenCV ready before extraction.");
     return;
   }
 
@@ -586,7 +686,6 @@ function extractStones() {
         y,
         row,
         col,
-        coord: pointToSgfCoord(col, row, n),
         delta: Number(delta.toFixed(2)),
       });
     }
@@ -630,11 +729,13 @@ function extractStones() {
     const radius = estimateStoneRadius(state.warpedImageData, point.x, point.y, step, result.color);
 
     stones.push({
-      coord: point.coord,
       property: result.property,
       color: result.color,
+      imgCol: point.col,
+      imgRow: point.row,
       col: point.col,
       row: point.row,
+      coord: pointToSgfCoord(point.col, point.row, n),
       delta: point.delta,
       radius,
     });
@@ -695,6 +796,7 @@ function downloadSgf() {
 
 function resetStateForNewImage() {
   state.corners = [];
+  state.activeCorners = [];
   state.rawStones = [];
   state.stones = [];
   state.sizeBuckets = [];
@@ -705,7 +807,7 @@ function resetStateForNewImage() {
   stoneTableBody.innerHTML = "";
   fillSizeBucketSelect([]);
   sgfOutput.value = "";
-  setStatus(extractStatus, "Set 4 corners, then extract stones.");
+  setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
   setStatus(sgfStatus, "No SGF generated yet.");
 }
 
@@ -790,7 +892,7 @@ sourceCanvas.addEventListener("click", (event) => {
   drawSourceImage();
 
   if (state.corners.length < 4) {
-    setStatus(cornerStatus, `Corner ${state.corners.length}/4 captured.`);
+    setStatus(cornerStatus, `Corner ${state.corners.length} captured. You can continue to 4, or extract now in zoomed/boxed mode.`);
   } else {
     state.corners = orderedCorners(state.corners);
     drawSourceImage();
@@ -804,6 +906,7 @@ autoCornersBtn.addEventListener("click", () => {
 
 resetCornersBtn.addEventListener("click", () => {
   state.corners = [];
+  state.activeCorners = [];
   state.rawStones = [];
   state.stones = [];
   state.sizeBuckets = [];
@@ -813,12 +916,13 @@ resetCornersBtn.addEventListener("click", () => {
   stoneTableBody.innerHTML = "";
   fillSizeBucketSelect([]);
   setStatus(cornerStatus, "Corners reset.");
-  setStatus(extractStatus, "Set 4 corners, then extract stones.");
+  setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
 });
 
 extractBtn.addEventListener("click", extractStones);
 applySizeFilterBtn.addEventListener("click", applySizeFilter);
 sizeBucketSelect.addEventListener("change", applySizeFilter);
+boardAnchorSelect.addEventListener("change", applySizeFilter);
 generateBtn.addEventListener("click", generateSgf);
 downloadBtn.addEventListener("click", downloadSgf);
 
