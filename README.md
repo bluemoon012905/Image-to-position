@@ -35,4 +35,3 @@ Open: `http://localhost:8080`
 - If full board edges are not visible, use 2 opposite clicks and set `Board anchor` (or `Auto corner`) to place stones into a board corner.
 - If auto-detect misses, click corners manually in order:
   top-left, top-right, bottom-right, bottom-left.
-- Threshold sliders help tune black/white stone extraction per photo.

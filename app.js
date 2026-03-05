@@ -43,8 +43,6 @@ const extractBtn = document.getElementById("extractBtn");
 const generateBtn = document.getElementById("generateBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 
-const blackThresholdInput = document.getElementById("blackThreshold");
-const whiteThresholdInput = document.getElementById("whiteThreshold");
 const boardAnchorSelect = document.getElementById("boardAnchorSelect");
 const puzzleColsInput = document.getElementById("puzzleColsInput");
 const puzzleRowsInput = document.getElementById("puzzleRowsInput");
@@ -68,6 +66,8 @@ const rotateBtn = document.getElementById("rotateBtn");
 const shiftValue = document.getElementById("shiftValue");
 
 const LETTERS = "abcdefghijklmnopqrstuvwxyz";
+const DEFAULT_BLACK_THRESHOLD = 24;
+const DEFAULT_WHITE_THRESHOLD = 22;
 
 function setStatus(el, message) {
   el.textContent = message;
@@ -1091,8 +1091,8 @@ function extractStones() {
     return;
   }
 
-  const blackThreshold = Number(blackThresholdInput.value);
-  const whiteThreshold = Number(whiteThresholdInput.value);
+  const blackThreshold = DEFAULT_BLACK_THRESHOLD;
+  const whiteThreshold = DEFAULT_WHITE_THRESHOLD;
   const rCenter = Math.max(2, samplingStep * 0.34);
   const rRingInner = samplingStep * 0.48;
   const rRingOuter = samplingStep * 0.72;
