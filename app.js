@@ -40,6 +40,7 @@ const cancelCropBtn = document.getElementById("cancelCropBtn");
 const extractBtn = document.getElementById("extractBtn");
 const blackThresholdInput = document.getElementById("blackThresholdInput");
 const whiteThresholdInput = document.getElementById("whiteThresholdInput");
+const autoBalanceCheckbox = document.getElementById("autoBalanceCheckbox");
 const generateBtn = document.getElementById("generateBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 
@@ -1081,34 +1082,56 @@ function extractStones() {
     return;
   }
 
-  const blackThreshold = Math.max(1, Number(blackThresholdInput.value) || DEFAULT_BLACK_THRESHOLD);
-  const whiteThreshold = Math.max(1, Number(whiteThresholdInput.value) || DEFAULT_WHITE_THRESHOLD);
+  let blackThreshold = Math.max(1, Number(blackThresholdInput.value) || DEFAULT_BLACK_THRESHOLD);
+  let whiteThreshold = Math.max(1, Number(whiteThresholdInput.value) || DEFAULT_WHITE_THRESHOLD);
+  const autoBalance = Boolean(autoBalanceCheckbox?.checked);
   const rCenter = Math.max(2, samplingStep * 0.34);
   const rRingInner = samplingStep * 0.48;
   const rRingOuter = samplingStep * 0.72;
 
-  const stones = [];
-  for (const point of points) {
-    const centerMean = sampleCircleStats(state.warpedImageData, point.x, point.y, 0, rCenter);
-    const ringMean = sampleCircleStats(state.warpedImageData, point.x, point.y, rRingInner, rRingOuter);
-    const delta = Number((ringMean - centerMean).toFixed(2));
-    const result = classifyStone(delta, blackThreshold, whiteThreshold);
-    if (result.color === "empty") continue;
-    const radius = point.r || estimateStoneRadius(state.warpedImageData, point.x, point.y, samplingStep, result.color);
+  function classifyPointsWithThresholds(blackT, whiteT) {
+    const out = [];
+    for (const point of points) {
+      const centerMean = sampleCircleStats(state.warpedImageData, point.x, point.y, 0, rCenter);
+      const ringMean = sampleCircleStats(state.warpedImageData, point.x, point.y, rRingInner, rRingOuter);
+      const delta = Number((ringMean - centerMean).toFixed(2));
+      const result = classifyStone(delta, blackT, whiteT);
+      if (result.color === "empty") continue;
+      const radius =
+        point.r || estimateStoneRadius(state.warpedImageData, point.x, point.y, samplingStep, result.color);
 
-    stones.push({
-      property: result.property,
-      color: result.color,
-      imgCol: point.col,
-      imgRow: point.row,
-      imgX: point.x,
-      imgY: point.y,
-      col: point.col,
-      row: point.row,
-      coord: pointToSgfCoord(point.col, point.row, n),
-      delta,
-      radius: Number(radius.toFixed(2)),
-    });
+      out.push({
+        property: result.property,
+        color: result.color,
+        imgCol: point.col,
+        imgRow: point.row,
+        imgX: point.x,
+        imgY: point.y,
+        col: point.col,
+        row: point.row,
+        coord: pointToSgfCoord(point.col, point.row, n),
+        delta,
+        radius: Number(radius.toFixed(2)),
+      });
+    }
+    return out;
+  }
+
+  let stones = classifyPointsWithThresholds(blackThreshold, whiteThreshold);
+  let autoBalanceNote = "";
+  if (autoBalance) {
+    const blackCount0 = stones.filter((s) => s.color === "black").length;
+    const whiteCount0 = stones.filter((s) => s.color === "white").length;
+    const bump = 2;
+    if (blackCount0 > whiteCount0 * 1.2) {
+      blackThreshold = Math.min(80, blackThreshold + bump);
+      stones = classifyPointsWithThresholds(blackThreshold, whiteThreshold);
+      autoBalanceNote = ` Auto-balance bumped black threshold +${bump}.`;
+    } else if (whiteCount0 > blackCount0 * 1.2) {
+      whiteThreshold = Math.min(80, whiteThreshold + bump);
+      stones = classifyPointsWithThresholds(blackThreshold, whiteThreshold);
+      autoBalanceNote = ` Auto-balance bumped white threshold +${bump}.`;
+    }
   }
 
   state.manualEdits = {};
@@ -1134,7 +1157,7 @@ function extractStones() {
       : "";
   setStatus(
     sgfStatus,
-    `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Thresholds: B=${blackThreshold}, W=${whiteThreshold}.`
+    `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Thresholds: B=${blackThreshold}, W=${whiteThreshold}.${autoBalanceNote}`
   );
 }
 
@@ -1313,6 +1336,12 @@ whiteThresholdInput.addEventListener("change", () => {
   const val = Math.max(1, Number(whiteThresholdInput.value) || DEFAULT_WHITE_THRESHOLD);
   whiteThresholdInput.value = String(val);
   setStatus(extractStatus, `White threshold set to ${val}. Re-extract to apply.`);
+});
+autoBalanceCheckbox.addEventListener("change", () => {
+  setStatus(
+    extractStatus,
+    `Auto balance ${autoBalanceCheckbox.checked ? "enabled" : "disabled"}. Re-extract to apply.`
+  );
 });
 
 sourceCanvas.addEventListener("click", (event) => {
@@ -1502,3 +1531,4 @@ updateShiftLabel();
 updateEditToolUI();
 blackThresholdInput.value = String(DEFAULT_BLACK_THRESHOLD);
 whiteThresholdInput.value = String(DEFAULT_WHITE_THRESHOLD);
+autoBalanceCheckbox.checked = false;
