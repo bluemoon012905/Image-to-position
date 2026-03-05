@@ -754,7 +754,7 @@ function sampleCircleStats(imgData, cx, cy, rInner, rOuter = rInner) {
 
 function pointToSgfCoord(i, j, n) {
   const x = LETTERS[i];
-  const y = LETTERS[n - 1 - j];
+  const y = LETTERS[j];
   return `${x}${y}`;
 }
 
