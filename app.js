@@ -12,9 +12,12 @@ const state = {
   isCropping: false,
   shiftX: 0,
   shiftY: 0,
+  rotation: 0,
   editTool: "erase",
   manualEdits: {},
   puzzleMode: false,
+  puzzleVisibleCols: 0,
+  puzzleVisibleRows: 0,
   rawStones: [],
   stones: [],
 };
@@ -42,6 +45,9 @@ const downloadBtn = document.getElementById("downloadBtn");
 const blackThresholdInput = document.getElementById("blackThreshold");
 const whiteThresholdInput = document.getElementById("whiteThreshold");
 const boardAnchorSelect = document.getElementById("boardAnchorSelect");
+const puzzleColsInput = document.getElementById("puzzleColsInput");
+const puzzleRowsInput = document.getElementById("puzzleRowsInput");
+const puzzleGridStatus = document.getElementById("puzzleGridStatus");
 
 const cornerStatus = document.getElementById("cornerStatus");
 const extractStatus = document.getElementById("extractStatus");
@@ -57,7 +63,7 @@ const shiftUpBtn = document.getElementById("shiftUpBtn");
 const shiftDownBtn = document.getElementById("shiftDownBtn");
 const shiftLeftBtn = document.getElementById("shiftLeftBtn");
 const shiftRightBtn = document.getElementById("shiftRightBtn");
-const shiftResetBtn = document.getElementById("shiftResetBtn");
+const rotateBtn = document.getElementById("rotateBtn");
 const shiftValue = document.getElementById("shiftValue");
 
 const LETTERS = "abcdefghijklmnopqrstuvwxyz";
@@ -68,8 +74,31 @@ function setStatus(el, message) {
 
 function updateShiftLabel() {
   if (shiftValue) {
-    shiftValue.textContent = `Shift: x=${state.shiftX}, y=${state.shiftY}`;
+    shiftValue.textContent = `Shift: x=${state.shiftX}, y=${state.shiftY}, rot=${state.rotation * 90}deg`;
   }
+}
+
+function updatePuzzleGridUI() {
+  if (puzzleColsInput) puzzleColsInput.value = String(state.puzzleVisibleCols || 0);
+  if (puzzleRowsInput) puzzleRowsInput.value = String(state.puzzleVisibleRows || 0);
+  if (puzzleGridStatus) {
+    if (state.puzzleVisibleCols > 0 && state.puzzleVisibleRows > 0) {
+      puzzleGridStatus.textContent = `Detected grid: ${state.puzzleVisibleCols} x ${state.puzzleVisibleRows}`;
+    } else {
+      puzzleGridStatus.textContent = "Detected grid: -";
+    }
+  }
+}
+
+function setPuzzleVisibleGrid(cols, rows) {
+  const maxN = Math.max(2, state.boardSize);
+  const c = Number(cols);
+  const r = Number(rows);
+  state.puzzleVisibleCols =
+    Number.isFinite(c) && c >= 2 ? Math.max(2, Math.min(maxN, Math.round(c))) : 0;
+  state.puzzleVisibleRows =
+    Number.isFinite(r) && r >= 2 ? Math.max(2, Math.min(maxN, Math.round(r))) : 0;
+  updatePuzzleGridUI();
 }
 
 function updateEditToolUI() {
@@ -860,27 +889,54 @@ function remapStonesToAnchor(stones, n, anchorMode) {
 
   const cols = stones.map((s) => s.imgCol ?? s.col);
   const rows = stones.map((s) => s.imgRow ?? s.row);
-  const minCol = Math.min(...cols);
-  const maxCol = Math.max(...cols);
-  const minRow = Math.min(...rows);
-  const maxRow = Math.max(...rows);
-  const spanCol = Math.max(1, maxCol - minCol + 1);
-  const spanRow = Math.max(1, maxRow - minRow + 1);
+  let minCol = Math.min(...cols);
+  let maxCol = Math.max(...cols);
+  let minRow = Math.min(...rows);
+  let maxRow = Math.max(...rows);
+  let spanCol = Math.max(1, maxCol - minCol + 1);
+  let spanRow = Math.max(1, maxRow - minRow + 1);
+
+  if (state.puzzleMode && state.puzzleVisibleCols > 0 && state.puzzleVisibleRows > 0) {
+    minCol = 0;
+    minRow = 0;
+    spanCol = state.puzzleVisibleCols;
+    spanRow = state.puzzleVisibleRows;
+  }
+
+  const rot = ((state.rotation % 4) + 4) % 4;
+  const rotatedSpanCol = rot % 2 === 0 ? spanCol : spanRow;
+  const rotatedSpanRow = rot % 2 === 0 ? spanRow : spanCol;
 
   let offsetCol = 0;
   let offsetRow = 0;
-  if (anchor === "tr" || anchor === "br") offsetCol = Math.max(0, n - spanCol);
-  if (anchor === "bl" || anchor === "br") offsetRow = Math.max(0, n - spanRow);
+  if (anchor === "tr" || anchor === "br") offsetCol = Math.max(0, n - rotatedSpanCol);
+  if (anchor === "bl" || anchor === "br") offsetRow = Math.max(0, n - rotatedSpanRow);
   if (anchor === "center") {
-    offsetCol = Math.max(0, Math.floor((n - spanCol) / 2));
-    offsetRow = Math.max(0, Math.floor((n - spanRow) / 2));
+    offsetCol = Math.max(0, Math.floor((n - rotatedSpanCol) / 2));
+    offsetRow = Math.max(0, Math.floor((n - rotatedSpanRow) / 2));
   }
 
   return stones.map((stone) => {
     const imgCol = stone.imgCol ?? stone.col;
     const imgRow = stone.imgRow ?? stone.row;
-    const col = Math.max(0, Math.min(n - 1, offsetCol + (imgCol - minCol) + state.shiftX));
-    const row = Math.max(0, Math.min(n - 1, offsetRow + (imgRow - minRow) + state.shiftY));
+    const localCol = imgCol - minCol;
+    const localRow = imgRow - minRow;
+    let rotatedCol = localCol;
+    let rotatedRow = localRow;
+
+    if (rot === 1) {
+      rotatedCol = spanRow - 1 - localRow;
+      rotatedRow = localCol;
+    } else if (rot === 2) {
+      rotatedCol = spanCol - 1 - localCol;
+      rotatedRow = spanRow - 1 - localRow;
+    } else if (rot === 3) {
+      rotatedCol = localRow;
+      rotatedRow = spanCol - 1 - localCol;
+    }
+
+    const col = Math.max(0, Math.min(n - 1, offsetCol + rotatedCol + state.shiftX));
+    const row = Math.max(0, Math.min(n - 1, offsetRow + rotatedRow + state.shiftY));
     return {
       ...stone,
       imgCol,
@@ -914,7 +970,7 @@ function applyPositionMapping() {
   updateShiftLabel();
   setStatus(
     extractStatus,
-    `Showing ${edited.length} stones (${blackCount} black, ${whiteCount} white), anchor=${anchorResolved}, shift=(${state.shiftX},${state.shiftY}).`
+    `Showing ${edited.length} stones (${blackCount} black, ${whiteCount} white), anchor=${anchorResolved}, shift=(${state.shiftX},${state.shiftY}), rot=${state.rotation * 90}deg.`
   );
 }
 
@@ -939,6 +995,9 @@ function extractStones() {
       points = grid.points;
       samplingStep = grid.step;
       puzzleInfo = grid;
+      setPuzzleVisibleGrid(grid.visibleCols, grid.visibleRows);
+    } else if (!state.puzzleVisibleCols || !state.puzzleVisibleRows) {
+      setPuzzleVisibleGrid(0, 0);
     }
   }
 
@@ -984,6 +1043,9 @@ function extractStones() {
   }
 
   state.manualEdits = {};
+  if (!state.puzzleMode) {
+    setPuzzleVisibleGrid(0, 0);
+  }
   state.rawStones = stones;
   if (stones.length) {
     applyPositionMapping();
@@ -1094,7 +1156,10 @@ function resetStateForNewImage() {
   state.isCropping = false;
   state.shiftX = 0;
   state.shiftY = 0;
+  state.rotation = 0;
   state.manualEdits = {};
+  state.puzzleVisibleCols = 0;
+  state.puzzleVisibleRows = 0;
   state.rawStones = [];
   state.stones = [];
   state.warpedImageData = null;
@@ -1107,6 +1172,7 @@ function resetStateForNewImage() {
   updateCropModeUI();
   updateShiftLabel();
   updateEditToolUI();
+  updatePuzzleGridUI();
 }
 
 function loadImageFromBlob(blob, sourceLabel) {
@@ -1167,13 +1233,33 @@ pasteZone.addEventListener("paste", (event) => {
 
 boardSizeSelect.addEventListener("change", () => {
   state.boardSize = Number(boardSizeSelect.value);
+  puzzleColsInput.max = String(state.boardSize);
+  puzzleRowsInput.max = String(state.boardSize);
+  if (state.puzzleVisibleCols || state.puzzleVisibleRows) {
+    setPuzzleVisibleGrid(state.puzzleVisibleCols, state.puzzleVisibleRows);
+  }
   setStatus(extractStatus, `Board size set to ${state.boardSize}x${state.boardSize}. Re-extract after changes.`);
 });
 
 puzzleModeSelect.addEventListener("change", () => {
   state.puzzleMode = puzzleModeSelect.value === "on";
   const modeText = state.puzzleMode ? "ON (partial-board grid estimate enabled)" : "OFF";
+  if (!state.puzzleMode) {
+    setPuzzleVisibleGrid(0, 0);
+  }
   setStatus(extractStatus, `Puzzle mode ${modeText}. Re-extract to apply.`);
+});
+
+puzzleColsInput.addEventListener("change", () => {
+  const cols = Number(puzzleColsInput.value);
+  setPuzzleVisibleGrid(cols, state.puzzleVisibleRows || Number(puzzleRowsInput.value));
+  if (state.puzzleMode && state.rawStones.length) applyPositionMapping();
+});
+
+puzzleRowsInput.addEventListener("change", () => {
+  const rows = Number(puzzleRowsInput.value);
+  setPuzzleVisibleGrid(state.puzzleVisibleCols || Number(puzzleColsInput.value), rows);
+  if (state.puzzleMode && state.rawStones.length) applyPositionMapping();
 });
 
 sourceCanvas.addEventListener("click", (event) => {
@@ -1249,7 +1335,10 @@ resetCornersBtn.addEventListener("click", () => {
   state.activeCorners = [];
   state.shiftX = 0;
   state.shiftY = 0;
+  state.rotation = 0;
   state.manualEdits = {};
+  state.puzzleVisibleCols = 0;
+  state.puzzleVisibleRows = 0;
   state.rawStones = [];
   state.stones = [];
   state.warpedImageData = null;
@@ -1258,6 +1347,7 @@ resetCornersBtn.addEventListener("click", () => {
   setStatus(cornerStatus, "Corners reset.");
   setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
   updateShiftLabel();
+  updatePuzzleGridUI();
 });
 
 cropModeBtn.addEventListener("click", () => {
@@ -1326,9 +1416,8 @@ shiftRightBtn.addEventListener("click", () => {
   state.shiftX += 1;
   applyPositionMapping();
 });
-shiftResetBtn.addEventListener("click", () => {
-  state.shiftX = 0;
-  state.shiftY = 0;
+rotateBtn.addEventListener("click", () => {
+  state.rotation = (state.rotation + 1) % 4;
   applyPositionMapping();
 });
 generateBtn.addEventListener("click", generateSgf);
@@ -1348,3 +1437,6 @@ drawSgfPreview([], state.boardSize);
 updateCropModeUI();
 updateShiftLabel();
 updateEditToolUI();
+puzzleColsInput.max = String(state.boardSize);
+puzzleRowsInput.max = String(state.boardSize);
+updatePuzzleGridUI();

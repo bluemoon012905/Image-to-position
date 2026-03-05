@@ -102,6 +102,18 @@
             </label>
           </div>
 
+          <div class="controls-row">
+            <label>
+              Visible cols
+              <input id="puzzleColsInput" type="number" min="2" max="25" value="0" />
+            </label>
+            <label>
+              Visible rows
+              <input id="puzzleRowsInput" type="number" min="2" max="25" value="0" />
+            </label>
+            <p class="status" id="puzzleGridStatus">Detected grid: -</p>
+          </div>
+
           <canvas id="warpCanvas" width="620" height="620"></canvas>
           <p id="extractStatus" class="status">Set 4 corners, then extract stones.</p>
         </article>
@@ -138,7 +150,7 @@
               <button id="shiftUpBtn" type="button" class="ghost dpad-btn">Up</button>
               <div class="dpad-mid">
                 <button id="shiftLeftBtn" type="button" class="ghost dpad-btn">Left</button>
-                <button id="shiftResetBtn" type="button" class="ghost dpad-btn">Center</button>
+                <button id="rotateBtn" type="button" class="ghost dpad-btn">Rotate</button>
                 <button id="shiftRightBtn" type="button" class="ghost dpad-btn">Right</button>
               </div>
               <button id="shiftDownBtn" type="button" class="ghost dpad-btn">Down</button>
