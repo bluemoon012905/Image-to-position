@@ -58,6 +58,7 @@ const sgfStatus = document.getElementById("sgfStatus");
 const sgfOutput = document.getElementById("sgfOutput");
 const gameNameInput = document.getElementById("gameName");
 const komiInput = document.getElementById("komiInput");
+const nextPlayerSelect = document.getElementById("nextPlayerSelect");
 const toolBlackBtn = document.getElementById("toolBlackBtn");
 const toolWhiteBtn = document.getElementById("toolWhiteBtn");
 const toolEraseBtn = document.getElementById("toolEraseBtn");
@@ -1404,8 +1405,9 @@ function generateSgf() {
 
   const gameName = (gameNameInput.value || "Imported position").replace(/]/g, "");
   const komi = (komiInput.value || "6.5").replace(/]/g, "");
+  const nextPlayer = nextPlayerSelect.value === "W" ? "W" : "B";
 
-  let sgf = `(;GM[1]FF[4]CA[UTF-8]AP[Image-to-SGF:1.0]SZ[${n}]GN[${gameName}]KM[${komi}]`;
+  let sgf = `(;GM[1]FF[4]CA[UTF-8]AP[Image-to-SGF:1.0]SZ[${n}]GN[${gameName}]KM[${komi}]PL[${nextPlayer}]`;
   if (blackCoords.length) {
     sgf += `\nAB${blackCoords.map((c) => `[${c}]`).join("")}`;
   }
