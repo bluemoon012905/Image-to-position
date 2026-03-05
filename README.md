@@ -20,7 +20,7 @@ Open: `http://localhost:8080`
 
 ## Deploy to GitHub Pages
 
-1. Push these files to your repository (`index.html`, `style.css`, `app.js`).
+1. Push these files to your repository (`index.html`, `style.css`, `js/`).
 2. In GitHub repo settings, enable Pages from your default branch root.
 3. Your app will be available at the Pages URL.
 
@@ -32,6 +32,6 @@ Open: `http://localhost:8080`
 - Step 3 includes a visual SGF preview board before download.
 - Step 3 lets you click the preview to add/remove stones and use a D-pad to nudge position in any direction; center is a 90-degree rotate button.
 - Current detection flow is tuned for full-board images (4-corner perspective warp).
-- Deferred ideas are tracked in `FUTURE_NOTES.md`.
+- Deferred ideas are tracked in `docs/FUTURE_NOTES.md`.
 - If auto-detect misses, click corners manually in order:
   top-left, top-right, bottom-right, bottom-left.

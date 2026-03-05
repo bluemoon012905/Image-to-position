@@ -1,6 +1,6 @@
 # State Flow Investigation
 
-This app uses a single mutable `state` object in [`app.js`](/home/bluey/personal/Image-to-position/app.js), not an explicit finite state machine. Flow is enforced by guard checks in event handlers (`if (!state.imageLoaded) return`, etc.) and by status messages.
+This app uses a single mutable `state` object in [`js/state.js`](/home/bluey/personal/Image-to-position/js/state.js), not an explicit finite state machine. Flow is enforced by guard checks in event handlers (`if (!state.imageLoaded) return`, etc.) and by status messages.
 
 ## Core State Buckets
 
