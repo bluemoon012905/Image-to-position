@@ -685,9 +685,7 @@ function drawWarpGrid(gridOverride = null) {
   warpCtx.restore();
 }
 
-function preprocessWarpImage() {
-  if (!state.warpedImageData || state.preprocessMode === "off") return;
-
+function buildDetectionGrayMat() {
   const src = cv.imread(warpCanvas);
   const gray = new cv.Mat();
   const denoise = new cv.Mat();
@@ -697,12 +695,21 @@ function preprocessWarpImage() {
   const bh = new cv.Mat();
   const enhanced = new cv.Mat();
   const tuned = new cv.Mat();
-  const out = new cv.Mat();
-
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
-  const isStrong = state.preprocessMode === "strong";
+  if (state.preprocessMode === "off") {
+    src.delete();
+    denoise.delete();
+    local.delete();
+    bhH.delete();
+    bhV.delete();
+    bh.delete();
+    enhanced.delete();
+    tuned.delete();
+    return gray;
+  }
 
+  const isStrong = state.preprocessMode === "strong";
   // Preserve edges while removing compression/noise artifacts.
   cv.bilateralFilter(gray, denoise, isStrong ? 9 : 7, isStrong ? 75 : 55, isStrong ? 75 : 55, cv.BORDER_DEFAULT);
 
@@ -734,10 +741,6 @@ function preprocessWarpImage() {
     cv.GaussianBlur(enhanced, tuned, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
     cv.convertScaleAbs(tuned, tuned, 1.02, 0);
   }
-  cv.cvtColor(tuned, out, cv.COLOR_GRAY2RGBA);
-
-  cv.imshow(warpCanvas, out);
-  state.warpedImageData = warpCtx.getImageData(0, 0, warpCanvas.width, warpCanvas.height);
 
   kernelH.delete();
   kernelV.delete();
@@ -749,8 +752,7 @@ function preprocessWarpImage() {
   bhV.delete();
   bh.delete();
   enhanced.delete();
-  tuned.delete();
-  out.delete();
+  return tuned;
 }
 
 function sampleCircleStats(imgData, cx, cy, rInner, rOuter = rInner) {
@@ -838,11 +840,9 @@ function estimateStoneRadius(imgData, cx, cy, step, color) {
 }
 
 function detectCircleCandidates(step) {
-  const src = cv.imread(warpCanvas);
-  const gray = new cv.Mat();
+  const detectGray = buildDetectionGrayMat();
   const blur = new cv.Mat();
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.medianBlur(gray, blur, 5);
+  cv.medianBlur(detectGray, blur, 5);
 
   const all = [];
   const minDist = Math.max(8, step * 0.72);
@@ -873,8 +873,7 @@ function detectCircleCandidates(step) {
     circles.delete();
   }
 
-  src.delete();
-  gray.delete();
+  detectGray.delete();
   blur.delete();
 
   const merged = [];
@@ -1307,7 +1306,6 @@ function extractStones() {
   const n = state.boardSize;
   const size = warpCanvas.width;
   const boardStep = (size - 1) / (n - 1);
-  preprocessWarpImage();
   const circleCandidates = detectCircleCandidates(boardStep);
   let points = circlesToIntersections(circleCandidates, n, boardStep);
   let samplingStep = boardStep;
