@@ -6,6 +6,10 @@ const state = {
   cvReady: false,
   warpedImageData: null,
   activeCorners: [],
+  cropMode: false,
+  cropRect: null,
+  cropDragStart: null,
+  isCropping: false,
   rawStones: [],
   stones: [],
   sizeBuckets: [],
@@ -23,6 +27,9 @@ const pasteZone = document.getElementById("pasteZone");
 const boardSizeSelect = document.getElementById("boardSizeSelect");
 const autoCornersBtn = document.getElementById("autoCornersBtn");
 const resetCornersBtn = document.getElementById("resetCornersBtn");
+const cropModeBtn = document.getElementById("cropModeBtn");
+const applyCropBtn = document.getElementById("applyCropBtn");
+const cancelCropBtn = document.getElementById("cancelCropBtn");
 const extractBtn = document.getElementById("extractBtn");
 const generateBtn = document.getElementById("generateBtn");
 const downloadBtn = document.getElementById("downloadBtn");
@@ -49,6 +56,18 @@ function setStatus(el, message) {
 
 function clearCanvas(ctx, canvas) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function normalizeRect(rect) {
+  const x = Math.min(rect.x1, rect.x2);
+  const y = Math.min(rect.y1, rect.y2);
+  const width = Math.abs(rect.x2 - rect.x1);
+  const height = Math.abs(rect.y2 - rect.y1);
+  return { x, y, width, height };
+}
+
+function updateCropModeUI() {
+  cropModeBtn.classList.toggle("toggle-active", state.cropMode);
 }
 
 function drawSgfPreview(stones = state.stones, n = state.boardSize) {
@@ -148,6 +167,7 @@ function drawSourceImage() {
   };
 
   drawCornerOverlay();
+  drawCropOverlay();
 }
 
 function drawCornerOverlay() {
@@ -182,6 +202,20 @@ function drawCornerOverlay() {
   sourceCtx.restore();
 }
 
+function drawCropOverlay() {
+  if (!state.cropRect) return;
+  const rect = normalizeRect(state.cropRect);
+  if (rect.width < 2 || rect.height < 2) return;
+
+  sourceCtx.save();
+  sourceCtx.fillStyle = "rgba(31, 95, 74, 0.16)";
+  sourceCtx.strokeStyle = "rgba(31, 95, 74, 0.88)";
+  sourceCtx.lineWidth = 2;
+  sourceCtx.fillRect(rect.x, rect.y, rect.width, rect.height);
+  sourceCtx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+  sourceCtx.restore();
+}
+
 function isPointInsideImage(x, y) {
   const m = state.drawMeta;
   if (!m) return false;
@@ -191,6 +225,22 @@ function isPointInsideImage(x, y) {
     x <= m.offsetX + m.drawW &&
     y <= m.offsetY + m.drawH
   );
+}
+
+function clampPointToImage(x, y) {
+  const m = state.drawMeta;
+  if (!m) return { x, y };
+  return {
+    x: Math.max(m.offsetX, Math.min(m.offsetX + m.drawW, x)),
+    y: Math.max(m.offsetY, Math.min(m.offsetY + m.drawH, y)),
+  };
+}
+
+function getCanvasPointFromEvent(event) {
+  const rect = sourceCanvas.getBoundingClientRect();
+  const x = ((event.clientX - rect.left) * sourceCanvas.width) / rect.width;
+  const y = ((event.clientY - rect.top) * sourceCanvas.height) / rect.height;
+  return { x, y };
 }
 
 function orderedCorners(points) {
@@ -794,9 +844,51 @@ function downloadSgf() {
   URL.revokeObjectURL(url);
 }
 
+function applyCropToImage() {
+  if (!state.image || !state.cropRect || !state.drawMeta) {
+    setStatus(cornerStatus, "Draw a crop rectangle first.");
+    return;
+  }
+
+  const rect = normalizeRect(state.cropRect);
+  if (rect.width < 8 || rect.height < 8) {
+    setStatus(cornerStatus, "Crop area is too small.");
+    return;
+  }
+
+  const topLeft = canvasToOriginal({ x: rect.x, y: rect.y });
+  const bottomRight = canvasToOriginal({ x: rect.x + rect.width, y: rect.y + rect.height });
+  const sx = Math.max(0, Math.floor(topLeft.x));
+  const sy = Math.max(0, Math.floor(topLeft.y));
+  const sw = Math.max(2, Math.floor(bottomRight.x - topLeft.x));
+  const sh = Math.max(2, Math.floor(bottomRight.y - topLeft.y));
+
+  const temp = document.createElement("canvas");
+  temp.width = sw;
+  temp.height = sh;
+  const tctx = temp.getContext("2d");
+  tctx.drawImage(state.image, sx, sy, sw, sh, 0, 0, sw, sh);
+
+  const img = new Image();
+  img.onload = () => {
+    state.image = img;
+    state.imageLoaded = true;
+    resetStateForNewImage();
+    drawSourceImage();
+    state.cropMode = false;
+    updateCropModeUI();
+    setStatus(cornerStatus, "Crop applied. Select corners or run auto-detect.");
+  };
+  img.src = temp.toDataURL("image/png");
+}
+
 function resetStateForNewImage() {
   state.corners = [];
   state.activeCorners = [];
+  state.cropMode = false;
+  state.cropRect = null;
+  state.cropDragStart = null;
+  state.isCropping = false;
   state.rawStones = [];
   state.stones = [];
   state.sizeBuckets = [];
@@ -809,6 +901,7 @@ function resetStateForNewImage() {
   sgfOutput.value = "";
   setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
   setStatus(sgfStatus, "No SGF generated yet.");
+  updateCropModeUI();
 }
 
 function loadImageFromBlob(blob, sourceLabel) {
@@ -874,10 +967,12 @@ boardSizeSelect.addEventListener("change", () => {
 
 sourceCanvas.addEventListener("click", (event) => {
   if (!state.imageLoaded) return;
+  if (state.cropMode) {
+    setStatus(cornerStatus, "Crop mode is enabled. Drag on the image, then apply crop.");
+    return;
+  }
 
-  const rect = sourceCanvas.getBoundingClientRect();
-  const x = ((event.clientX - rect.left) * sourceCanvas.width) / rect.width;
-  const y = ((event.clientY - rect.top) * sourceCanvas.height) / rect.height;
+  const { x, y } = getCanvasPointFromEvent(event);
 
   if (!isPointInsideImage(x, y)) {
     setStatus(cornerStatus, "Click inside the image area.");
@@ -900,6 +995,40 @@ sourceCanvas.addEventListener("click", (event) => {
   }
 });
 
+sourceCanvas.addEventListener("mousedown", (event) => {
+  if (!state.imageLoaded || !state.cropMode) return;
+  const point = getCanvasPointFromEvent(event);
+  if (!isPointInsideImage(point.x, point.y)) return;
+  const clamped = clampPointToImage(point.x, point.y);
+  state.cropDragStart = clamped;
+  state.cropRect = { x1: clamped.x, y1: clamped.y, x2: clamped.x, y2: clamped.y };
+  state.isCropping = true;
+  drawSourceImage();
+});
+
+sourceCanvas.addEventListener("mousemove", (event) => {
+  if (!state.imageLoaded || !state.cropMode || !state.isCropping || !state.cropDragStart) return;
+  const point = getCanvasPointFromEvent(event);
+  const clamped = clampPointToImage(point.x, point.y);
+  state.cropRect = {
+    x1: state.cropDragStart.x,
+    y1: state.cropDragStart.y,
+    x2: clamped.x,
+    y2: clamped.y,
+  };
+  drawSourceImage();
+});
+
+sourceCanvas.addEventListener("mouseup", () => {
+  if (!state.cropMode) return;
+  state.isCropping = false;
+});
+
+sourceCanvas.addEventListener("mouseleave", () => {
+  if (!state.cropMode) return;
+  state.isCropping = false;
+});
+
 autoCornersBtn.addEventListener("click", () => {
   autoDetectCorners();
 });
@@ -917,6 +1046,39 @@ resetCornersBtn.addEventListener("click", () => {
   fillSizeBucketSelect([]);
   setStatus(cornerStatus, "Corners reset.");
   setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
+});
+
+cropModeBtn.addEventListener("click", () => {
+  if (!state.imageLoaded) {
+    setStatus(cornerStatus, "Upload or paste an image first.");
+    return;
+  }
+  state.cropMode = !state.cropMode;
+  if (!state.cropMode) {
+    state.cropRect = null;
+    state.cropDragStart = null;
+    state.isCropping = false;
+    drawSourceImage();
+  }
+  updateCropModeUI();
+  setStatus(
+    cornerStatus,
+    state.cropMode
+      ? "Crop mode enabled. Drag on image, then click Apply crop."
+      : "Crop mode disabled."
+  );
+});
+
+applyCropBtn.addEventListener("click", () => {
+  applyCropToImage();
+});
+
+cancelCropBtn.addEventListener("click", () => {
+  state.cropRect = null;
+  state.cropDragStart = null;
+  state.isCropping = false;
+  drawSourceImage();
+  setStatus(cornerStatus, "Crop selection cleared.");
 });
 
 extractBtn.addEventListener("click", extractStones);
@@ -937,3 +1099,4 @@ function waitForCv() {
 
 waitForCv();
 drawSgfPreview([], state.boardSize);
+updateCropModeUI();

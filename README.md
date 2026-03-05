@@ -28,6 +28,7 @@ Open: `http://localhost:8080`
 
 - Corner auto-detect uses OpenCV.js in the browser.
 - You can import with file upload or by pasting an image into the paste box.
+- You can crop after upload/paste using `Crop mode` -> drag box -> `Apply crop`.
 - Step 3 includes a visual SGF preview board before download.
 - If full board edges are not visible, use 2 opposite clicks and set `Board anchor` (or `Auto corner`) to place stones into a board corner.
 - If auto-detect misses, click corners manually in order:

@@ -130,6 +130,11 @@ button.ghost {
   color: var(--accent);
 }
 
+button.toggle-active {
+  background: var(--accent);
+  color: #fff;
+}
+
 button:hover {
   transform: translateY(-1px);
 }
