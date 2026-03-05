@@ -20,6 +20,7 @@ const state = {
   puzzleVisibleCols: 0,
   puzzleVisibleRows: 0,
   detectedPuzzleGrid: null,
+  mappingContext: null,
   rawStones: [],
   stones: [],
 };
@@ -136,31 +137,14 @@ function median(values) {
 function applyManualEdits(stones, n) {
   const map = new Map();
   for (const stone of stones) {
-    map.set(`${stone.row},${stone.col}`, { ...stone });
+    map.set(`${stone.localRow},${stone.localCol}`, { ...stone });
   }
 
   for (const [key, color] of Object.entries(state.manualEdits)) {
-    const [rowStr, colStr] = key.split(",");
-    const row = Number(rowStr);
-    const col = Number(colStr);
-    if (row < 0 || col < 0 || row >= n || col >= n) continue;
-
     if (color === "empty") {
       map.delete(key);
       continue;
     }
-
-    map.set(key, {
-      property: propertyForColor(color),
-      color,
-      imgCol: col,
-      imgRow: row,
-      col,
-      row,
-      coord: pointToSgfCoord(col, row, n),
-      delta: 0,
-      radius: 0,
-    });
   }
 
   return [...map.values()].sort((a, b) => a.row - b.row || a.col - b.col);
@@ -1065,8 +1049,12 @@ function resolveAutoAnchor() {
 
 function remapStonesToAnchor(stones, n, anchorMode) {
   if (!stones.length) return [];
-  const anchor = anchorMode === "auto" ? resolveAutoAnchor() : anchorMode;
+  const ctx = getMappingContext(stones, n, anchorMode);
+  return remapStonesWithContext(stones, n, ctx);
+}
 
+function getMappingContext(stones, n, anchorMode) {
+  const anchor = anchorMode === "auto" ? resolveAutoAnchor() : anchorMode;
   const cols = stones.map((s) => s.imgCol ?? s.col);
   const rows = stones.map((s) => s.imgRow ?? s.row);
   let minCol = Math.min(...cols);
@@ -1096,34 +1084,87 @@ function remapStonesToAnchor(stones, n, anchorMode) {
     offsetRow = Math.max(0, Math.floor((n - rotatedSpanRow) / 2));
   }
 
+  return {
+    n,
+    rot,
+    minCol,
+    minRow,
+    spanCol,
+    spanRow,
+    rotatedSpanCol,
+    rotatedSpanRow,
+    offsetCol,
+    offsetRow,
+    shiftX: state.shiftX,
+    shiftY: state.shiftY,
+  };
+}
+
+function mapLocalToBoard(localCol, localRow, ctx) {
+  let rotatedCol = localCol;
+  let rotatedRow = localRow;
+  if (ctx.rot === 1) {
+    rotatedCol = ctx.spanRow - 1 - localRow;
+    rotatedRow = localCol;
+  } else if (ctx.rot === 2) {
+    rotatedCol = ctx.spanCol - 1 - localCol;
+    rotatedRow = ctx.spanRow - 1 - localRow;
+  } else if (ctx.rot === 3) {
+    rotatedCol = localRow;
+    rotatedRow = ctx.spanCol - 1 - localCol;
+  }
+  const col = Math.max(0, Math.min(ctx.n - 1, ctx.offsetCol + rotatedCol + ctx.shiftX));
+  const row = Math.max(0, Math.min(ctx.n - 1, ctx.offsetRow + rotatedRow + ctx.shiftY));
+  return { col, row };
+}
+
+function mapBoardToLocal(col, row, ctx) {
+  const rotatedCol = col - ctx.offsetCol - ctx.shiftX;
+  const rotatedRow = row - ctx.offsetRow - ctx.shiftY;
+  if (
+    rotatedCol < 0 ||
+    rotatedRow < 0 ||
+    rotatedCol > ctx.rotatedSpanCol - 1 ||
+    rotatedRow > ctx.rotatedSpanRow - 1
+  ) {
+    return null;
+  }
+
+  let localCol = rotatedCol;
+  let localRow = rotatedRow;
+  if (ctx.rot === 1) {
+    localCol = rotatedRow;
+    localRow = ctx.spanRow - 1 - rotatedCol;
+  } else if (ctx.rot === 2) {
+    localCol = ctx.spanCol - 1 - rotatedCol;
+    localRow = ctx.spanRow - 1 - rotatedRow;
+  } else if (ctx.rot === 3) {
+    localCol = ctx.spanCol - 1 - rotatedRow;
+    localRow = rotatedCol;
+  }
+
+  if (localCol < 0 || localRow < 0 || localCol > ctx.spanCol - 1 || localRow > ctx.spanRow - 1) {
+    return null;
+  }
+  return { col: localCol, row: localRow };
+}
+
+function remapStonesWithContext(stones, n, ctx) {
   return stones.map((stone) => {
     const imgCol = stone.imgCol ?? stone.col;
     const imgRow = stone.imgRow ?? stone.row;
-    const localCol = imgCol - minCol;
-    const localRow = imgRow - minRow;
-    let rotatedCol = localCol;
-    let rotatedRow = localRow;
-
-    if (rot === 1) {
-      rotatedCol = spanRow - 1 - localRow;
-      rotatedRow = localCol;
-    } else if (rot === 2) {
-      rotatedCol = spanCol - 1 - localCol;
-      rotatedRow = spanRow - 1 - localRow;
-    } else if (rot === 3) {
-      rotatedCol = localRow;
-      rotatedRow = spanCol - 1 - localCol;
-    }
-
-    const col = Math.max(0, Math.min(n - 1, offsetCol + rotatedCol + state.shiftX));
-    const row = Math.max(0, Math.min(n - 1, offsetRow + rotatedRow + state.shiftY));
+    const localCol = imgCol - ctx.minCol;
+    const localRow = imgRow - ctx.minRow;
+    const board = mapLocalToBoard(localCol, localRow, ctx);
     return {
       ...stone,
       imgCol,
       imgRow,
-      col,
-      row,
-      coord: pointToSgfCoord(col, row, n),
+      localCol,
+      localRow,
+      col: board.col,
+      row: board.row,
+      coord: pointToSgfCoord(board.col, board.row, n),
     };
   });
 }
@@ -1137,20 +1178,51 @@ function applyPositionMapping() {
   const n = state.boardSize;
   const size = warpCanvas.width;
   const step = (size - 1) / (n - 1);
-  const mapped = remapStonesToAnchor(state.rawStones, n, boardAnchorSelect.value);
+  const ctx = getMappingContext(state.rawStones, n, boardAnchorSelect.value);
+  state.mappingContext = ctx;
+  const mapped = remapStonesWithContext(state.rawStones, n, ctx);
   const edited = applyManualEdits(mapped, n);
-  state.stones = edited;
-  renderWarpAndStoneMarkers(state.rawStones, step);
-  renderStoneTable(edited);
-  drawSgfPreview(edited, n);
 
-  const blackCount = edited.filter((s) => s.color === "black").length;
-  const whiteCount = edited.filter((s) => s.color === "white").length;
+  // Apply local-space manual overrides on top of mapped base stones.
+  const editedMap = new Map(edited.map((s) => [`${s.localRow},${s.localCol}`, s]));
+  for (const [key, color] of Object.entries(state.manualEdits)) {
+    const [localRowStr, localColStr] = key.split(",");
+    const localRow = Number(localRowStr);
+    const localCol = Number(localColStr);
+    if (!Number.isFinite(localRow) || !Number.isFinite(localCol)) continue;
+    if (color === "empty") {
+      editedMap.delete(key);
+      continue;
+    }
+    const board = mapLocalToBoard(localCol, localRow, ctx);
+    editedMap.set(key, {
+      property: propertyForColor(color),
+      color,
+      imgCol: localCol + ctx.minCol,
+      imgRow: localRow + ctx.minRow,
+      localCol,
+      localRow,
+      col: board.col,
+      row: board.row,
+      coord: pointToSgfCoord(board.col, board.row, n),
+      delta: 0,
+      radius: 0,
+    });
+  }
+
+  const mergedEdited = [...editedMap.values()].sort((a, b) => a.row - b.row || a.col - b.col);
+  state.stones = mergedEdited;
+  renderWarpAndStoneMarkers(state.rawStones, step);
+  renderStoneTable(mergedEdited);
+  drawSgfPreview(mergedEdited, n);
+
+  const blackCount = mergedEdited.filter((s) => s.color === "black").length;
+  const whiteCount = mergedEdited.filter((s) => s.color === "white").length;
   const anchorResolved = boardAnchorSelect.value === "auto" ? resolveAutoAnchor() : boardAnchorSelect.value;
   updateShiftLabel();
   setStatus(
     extractStatus,
-    `Showing ${edited.length} stones (${blackCount} black, ${whiteCount} white), anchor=${anchorResolved}, shift=(${state.shiftX},${state.shiftY}), rot=${state.rotation * 90}deg.`
+    `Showing ${mergedEdited.length} stones (${blackCount} black, ${whiteCount} white), anchor=${anchorResolved}, shift=(${state.shiftX},${state.shiftY}), rot=${state.rotation * 90}deg.`
   );
 }
 
@@ -1347,6 +1419,7 @@ function resetStateForNewImage() {
   state.puzzleVisibleCols = 0;
   state.puzzleVisibleRows = 0;
   state.detectedPuzzleGrid = null;
+  state.mappingContext = null;
   state.rawStones = [];
   state.stones = [];
   state.warpedImageData = null;
@@ -1528,6 +1601,7 @@ resetCornersBtn.addEventListener("click", () => {
   state.puzzleVisibleCols = 0;
   state.puzzleVisibleRows = 0;
   state.detectedPuzzleGrid = null;
+  state.mappingContext = null;
   state.rawStones = [];
   state.stones = [];
   state.warpedImageData = null;
@@ -1578,10 +1652,13 @@ toolBlackBtn.addEventListener("click", () => setEditTool("black"));
 toolWhiteBtn.addEventListener("click", () => setEditTool("white"));
 toolEraseBtn.addEventListener("click", () => setEditTool("erase"));
 sgfPreviewCanvas.addEventListener("click", (event) => {
-  if (!state.warpedImageData) return;
+  if (!state.warpedImageData || !state.mappingContext) return;
   const point = getPreviewBoardPoint(event);
   if (!point) return;
-  const key = `${point.row},${point.col}`;
+
+  const local = mapBoardToLocal(point.col, point.row, state.mappingContext);
+  if (!local) return;
+  const key = `${local.row},${local.col}`;
   if (state.editTool === "erase") {
     state.manualEdits[key] = "empty";
   } else {
