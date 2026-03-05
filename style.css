@@ -193,6 +193,60 @@ textarea {
   background: #dcc298;
 }
 
+#step3-card {
+  position: relative;
+  border-color: rgba(13, 33, 27, 0.35);
+  background: linear-gradient(145deg, rgba(229, 247, 238, 0.88), rgba(250, 242, 225, 0.92));
+  overflow: hidden;
+}
+
+#step3-card::before {
+  content: "";
+  position: absolute;
+  top: -48px;
+  right: -42px;
+  width: 170px;
+  height: 170px;
+  background: linear-gradient(160deg, rgba(31, 95, 74, 0.28), rgba(217, 129, 61, 0.25));
+  transform: rotate(24deg);
+  border-radius: 1.2rem;
+  pointer-events: none;
+}
+
+.sgf-studio {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.7rem;
+}
+
+.sgf-pane {
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(17, 17, 17, 0.13);
+  border-radius: 0.7rem;
+  padding: 0.55rem;
+}
+
+.pane-title {
+  margin: 0 0 0.42rem;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  color: #25463a;
+  text-transform: uppercase;
+}
+
+#sgfPreviewCanvas {
+  margin-bottom: 0;
+  max-height: 260px;
+  object-fit: contain;
+}
+
+#sgfOutput {
+  min-height: 180px;
+  margin-bottom: 0;
+  background: rgba(255, 255, 255, 0.92);
+}
+
 @media (min-width: 1040px) {
   .steps {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -206,5 +260,20 @@ textarea {
   #step2-card,
   #step3-card {
     grid-column: span 1;
+  }
+}
+
+@media (min-width: 740px) {
+  .sgf-studio {
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    align-items: stretch;
+  }
+
+  #sgfPreviewCanvas {
+    max-height: 310px;
+  }
+
+  #sgfOutput {
+    min-height: 310px;
   }
 }
