@@ -60,7 +60,7 @@ const rotateBtn = document.getElementById("rotateBtn");
 const shiftValue = document.getElementById("shiftValue");
 
 const LETTERS = "abcdefghijklmnopqrstuvwxyz";
-const DEFAULT_BLACK_THRESHOLD = 24;
+const DEFAULT_BLACK_THRESHOLD = 26;
 const DEFAULT_WHITE_THRESHOLD = 22;
 
 function setStatus(el, message) {
