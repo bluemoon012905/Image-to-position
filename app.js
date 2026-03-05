@@ -689,35 +689,65 @@ function preprocessWarpImage() {
 
   const src = cv.imread(warpCanvas);
   const gray = new cv.Mat();
-  const smooth = new cv.Mat();
-  const eq = new cv.Mat();
+  const denoise = new cv.Mat();
+  const local = new cv.Mat();
+  const bhH = new cv.Mat();
+  const bhV = new cv.Mat();
+  const bh = new cv.Mat();
+  const enhanced = new cv.Mat();
   const tuned = new cv.Mat();
   const out = new cv.Mat();
 
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
-  if (state.preprocessMode === "strong") {
-    cv.medianBlur(gray, smooth, 5);
-    cv.GaussianBlur(smooth, smooth, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+  const isStrong = state.preprocessMode === "strong";
+
+  // Preserve edges while removing compression/noise artifacts.
+  cv.bilateralFilter(gray, denoise, isStrong ? 9 : 7, isStrong ? 75 : 55, isStrong ? 75 : 55, cv.BORDER_DEFAULT);
+
+  // Local contrast is more stable than global equalization for mixed lighting.
+  if (typeof cv.createCLAHE === "function") {
+    const clahe = cv.createCLAHE(isStrong ? 3.2 : 2.2, new cv.Size(8, 8));
+    clahe.apply(denoise, local);
+    clahe.delete();
   } else {
-    cv.GaussianBlur(gray, smooth, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
+    cv.equalizeHist(denoise, local);
   }
 
-  cv.equalizeHist(smooth, eq);
+  // Boost dark board lines in both horizontal and vertical directions.
+  const kLen = isStrong ? 13 : 9;
+  const kernelH = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kLen, 1));
+  const kernelV = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, kLen));
+  cv.morphologyEx(local, bhH, cv.MORPH_BLACKHAT, kernelH);
+  cv.morphologyEx(local, bhV, cv.MORPH_BLACKHAT, kernelV);
+  cv.addWeighted(bhH, 0.5, bhV, 0.5, 0, bh);
+
+  // Subtract line map from luminance so grid lines appear cleaner/darker.
+  cv.addWeighted(local, 1.0, bh, isStrong ? -1.05 : -0.78, 0, enhanced);
+
+  // Light smoothing after enhancement to avoid crunchy artifacts.
   if (state.preprocessMode === "strong") {
-    cv.convertScaleAbs(eq, tuned, 1.28, 8);
+    cv.GaussianBlur(enhanced, tuned, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
+    cv.convertScaleAbs(tuned, tuned, 1.05, 1);
   } else {
-    cv.convertScaleAbs(eq, tuned, 1.16, 4);
+    cv.GaussianBlur(enhanced, tuned, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
+    cv.convertScaleAbs(tuned, tuned, 1.02, 0);
   }
   cv.cvtColor(tuned, out, cv.COLOR_GRAY2RGBA);
 
   cv.imshow(warpCanvas, out);
   state.warpedImageData = warpCtx.getImageData(0, 0, warpCanvas.width, warpCanvas.height);
 
+  kernelH.delete();
+  kernelV.delete();
   src.delete();
   gray.delete();
-  smooth.delete();
-  eq.delete();
+  denoise.delete();
+  local.delete();
+  bhH.delete();
+  bhV.delete();
+  bh.delete();
+  enhanced.delete();
   tuned.delete();
   out.delete();
 }
@@ -1553,7 +1583,7 @@ puzzleModeSelect.addEventListener("change", () => {
 
 preprocessModeSelect.addEventListener("change", () => {
   state.preprocessMode = preprocessModeSelect.value;
-  setStatus(extractStatus, `Image cleanup set to ${state.preprocessMode}. Re-extract to apply.`);
+  setStatus(extractStatus, `Line cleanup set to ${state.preprocessMode}. Re-extract to apply.`);
 });
 
 puzzleColsInput.addEventListener("change", () => {
