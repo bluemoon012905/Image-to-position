@@ -22,6 +22,8 @@ const state = {
   stones: [],
   extracting: false,
   detectionMode: "preprocessed",
+  showImagePreview: false,
+  warpPreviewCanvas: null,
 };
 
 const sourceCanvas = document.getElementById("sourceCanvas");
@@ -58,6 +60,7 @@ const nextPlayerSelect = document.getElementById("nextPlayerSelect");
 const toolBlackBtn = document.getElementById("toolBlackBtn");
 const toolWhiteBtn = document.getElementById("toolWhiteBtn");
 const toolEraseBtn = document.getElementById("toolEraseBtn");
+const showImageBtn = document.getElementById("showImageBtn");
 const editToolStatus = document.getElementById("editToolStatus");
 const shiftUpBtn = document.getElementById("shiftUpBtn");
 const shiftDownBtn = document.getElementById("shiftDownBtn");
@@ -88,6 +91,29 @@ function updateEditToolUI() {
     const text = state.editTool === "erase" ? "remove" : `add ${state.editTool}`;
     editToolStatus.textContent = `Tool: ${text}`;
   }
+}
+
+function getWarpPreviewCanvas() {
+  if (!state.warpedImageData) return null;
+  if (state.warpPreviewCanvas) return state.warpPreviewCanvas;
+
+  const temp = document.createElement("canvas");
+  temp.width = state.warpedImageData.width;
+  temp.height = state.warpedImageData.height;
+  const tctx = temp.getContext("2d");
+  tctx.putImageData(state.warpedImageData, 0, 0);
+  state.warpPreviewCanvas = temp;
+  return temp;
+}
+
+function setShowImagePreview(enabled) {
+  const next = Boolean(enabled);
+  if (state.showImagePreview === next) return;
+  state.showImagePreview = next;
+  if (showImageBtn) {
+    showImageBtn.classList.toggle("toggle-active", next);
+  }
+  drawSgfPreview(state.stones, state.boardSize);
 }
 
 function setEditTool(tool) {
@@ -238,6 +264,16 @@ function drawSgfPreview(stones = state.stones, n = state.boardSize) {
 
   ctx.save();
   ctx.translate((vp.width - size) / 2, (vp.height - size) / 2);
+
+  if (state.showImagePreview) {
+    const warpPreview = getWarpPreviewCanvas();
+    if (warpPreview) {
+      ctx.save();
+      ctx.globalAlpha = 0.78;
+      ctx.drawImage(warpPreview, margin, margin, boardArea, boardArea);
+      ctx.restore();
+    }
+  }
 
   ctx.strokeStyle = "rgba(26, 20, 14, 0.75)";
   ctx.lineWidth = 1;
@@ -620,6 +656,7 @@ function warpBoardFromCorners() {
   cv.imshow(warpCanvas, dst);
 
   state.warpedImageData = warpCtx.getImageData(0, 0, warpCanvas.width, warpCanvas.height);
+  state.warpPreviewCanvas = null;
 
   src.delete();
   dst.delete();
@@ -1667,6 +1704,8 @@ function resetStateForNewImage() {
   state.rawStones = [];
   state.stones = [];
   state.warpedImageData = null;
+  state.warpPreviewCanvas = null;
+  state.showImagePreview = false;
 
   clearCanvas(warpCtx, warpCanvas);
   drawSgfPreview([], state.boardSize);
@@ -1852,6 +1891,8 @@ resetCornersBtn.addEventListener("click", () => {
   state.rawStones = [];
   state.stones = [];
   state.warpedImageData = null;
+  state.warpPreviewCanvas = null;
+  state.showImagePreview = false;
   drawSourceImage();
   clearCanvas(warpCtx, warpCanvas);
   setStatus(cornerStatus, "Corners reset.");
@@ -1896,6 +1937,26 @@ extractBtn.addEventListener("click", extractStones);
 toolBlackBtn.addEventListener("click", () => setEditTool("black"));
 toolWhiteBtn.addEventListener("click", () => setEditTool("white"));
 toolEraseBtn.addEventListener("click", () => setEditTool("erase"));
+showImageBtn.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  if (!state.warpedImageData) {
+    setStatus(sgfStatus, "Run extraction first, then hold show image.");
+    return;
+  }
+  setShowImagePreview(true);
+});
+showImageBtn.addEventListener("pointerup", () => {
+  setShowImagePreview(false);
+});
+showImageBtn.addEventListener("pointerleave", () => {
+  setShowImagePreview(false);
+});
+showImageBtn.addEventListener("pointercancel", () => {
+  setShowImagePreview(false);
+});
+showImageBtn.addEventListener("blur", () => {
+  setShowImagePreview(false);
+});
 sgfPreviewCanvas.addEventListener("click", (event) => {
   if (!state.warpedImageData || !state.mappingContext) return;
   const point = getPreviewBoardPoint(event);
