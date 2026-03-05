@@ -16,6 +16,7 @@ const warpCanvas = document.getElementById("warpCanvas");
 const warpCtx = warpCanvas.getContext("2d");
 
 const imageInput = document.getElementById("imageInput");
+const pasteZone = document.getElementById("pasteZone");
 const boardSizeSelect = document.getElementById("boardSizeSelect");
 const autoCornersBtn = document.getElementById("autoCornersBtn");
 const resetCornersBtn = document.getElementById("resetCornersBtn");
@@ -617,32 +618,75 @@ function downloadSgf() {
   URL.revokeObjectURL(url);
 }
 
+function resetStateForNewImage() {
+  state.corners = [];
+  state.rawStones = [];
+  state.stones = [];
+  state.sizeBuckets = [];
+  state.warpedImageData = null;
+
+  clearCanvas(warpCtx, warpCanvas);
+  stoneTableBody.innerHTML = "";
+  fillSizeBucketSelect([]);
+  sgfOutput.value = "";
+  setStatus(extractStatus, "Set 4 corners, then extract stones.");
+  setStatus(sgfStatus, "No SGF generated yet.");
+}
+
+function loadImageFromBlob(blob, sourceLabel) {
+  if (!blob || !blob.type.startsWith("image/")) {
+    setStatus(cornerStatus, "Clipboard/file content is not an image.");
+    return;
+  }
+
+  const imageUrl = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    URL.revokeObjectURL(imageUrl);
+    state.image = img;
+    state.imageLoaded = true;
+    resetStateForNewImage();
+    drawSourceImage();
+    setStatus(cornerStatus, `${sourceLabel} image loaded. Select corners or run auto-detect.`);
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(imageUrl);
+    setStatus(cornerStatus, "Could not read image data.");
+  };
+
+  img.src = imageUrl;
+}
+
 imageInput.addEventListener("change", (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
+  loadImageFromBlob(file, "Uploaded");
+});
 
-  const img = new Image();
-  img.onload = () => {
-    state.image = img;
-    state.imageLoaded = true;
-    state.corners = [];
-    state.rawStones = [];
-    state.stones = [];
-    state.sizeBuckets = [];
-    state.warpedImageData = null;
+pasteZone.addEventListener("focus", () => {
+  if (pasteZone.textContent.trim() === "Paste image here (Ctrl+V / Cmd+V)") {
+    pasteZone.textContent = "";
+  }
+});
 
-    drawSourceImage();
-    clearCanvas(warpCtx, warpCanvas);
-    stoneTableBody.innerHTML = "";
-    fillSizeBucketSelect([]);
+pasteZone.addEventListener("blur", () => {
+  if (!pasteZone.textContent.trim()) {
+    pasteZone.textContent = "Paste image here (Ctrl+V / Cmd+V)";
+  }
+});
 
-    setStatus(cornerStatus, "Image loaded. Select corners or run auto-detect.");
-    setStatus(extractStatus, "Set 4 corners, then extract stones.");
-    setStatus(sgfStatus, "No SGF generated yet.");
-    sgfOutput.value = "";
-  };
+pasteZone.addEventListener("paste", (event) => {
+  const items = event.clipboardData?.items || [];
+  const imageItem = [...items].find((item) => item.type.startsWith("image/"));
+  if (!imageItem) {
+    setStatus(cornerStatus, "Clipboard has no image. Copy an image first, then paste.");
+    return;
+  }
 
-  img.src = URL.createObjectURL(file);
+  event.preventDefault();
+  const blob = imageItem.getAsFile();
+  loadImageFromBlob(blob, "Pasted");
+  pasteZone.textContent = "Paste image here (Ctrl+V / Cmd+V)";
 });
 
 boardSizeSelect.addEventListener("change", () => {

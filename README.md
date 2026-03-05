@@ -27,6 +27,7 @@ Open: `http://localhost:8080`
 ## Notes
 
 - Corner auto-detect uses OpenCV.js in the browser.
+- You can import with file upload or by pasting an image into the paste box.
 - If auto-detect misses, click corners manually in order:
   top-left, top-right, bottom-right, bottom-left.
 - Threshold sliders help tune black/white stone extraction per photo.

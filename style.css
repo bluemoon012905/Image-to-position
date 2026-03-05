@@ -82,6 +82,23 @@ label {
   min-width: 220px;
 }
 
+.paste-zone {
+  border: 1px dashed rgba(31, 95, 74, 0.42);
+  border-radius: 0.7rem;
+  padding: 0.7rem 0.8rem;
+  background: rgba(236, 246, 241, 0.55);
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.86rem;
+  margin-bottom: 0.8rem;
+  min-height: 2.6rem;
+}
+
+.paste-zone:focus {
+  outline: 2px solid rgba(31, 95, 74, 0.38);
+  outline-offset: 1px;
+}
+
 input,
 select,
 button,
