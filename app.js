@@ -21,6 +21,7 @@ const state = {
   rawStones: [],
   stones: [],
   extracting: false,
+  detectionMode: "preprocessed",
 };
 
 const sourceCanvas = document.getElementById("sourceCanvas");
@@ -43,6 +44,7 @@ const blackThresholdInput = document.getElementById("blackThresholdInput");
 const whiteThresholdInput = document.getElementById("whiteThresholdInput");
 const autoBalanceCheckbox = document.getElementById("autoBalanceCheckbox");
 const autoBalanceSpinner = document.getElementById("autoBalanceSpinner");
+const detectionModeSelect = document.getElementById("detectionModeSelect");
 const generateBtn = document.getElementById("generateBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 
@@ -443,6 +445,80 @@ function orderedCorners(points) {
   return [tl, tr, br, bl];
 }
 
+function clampOriginalPoint(point, width, height) {
+  return {
+    x: Math.max(0, Math.min(width - 1, point.x)),
+    y: Math.max(0, Math.min(height - 1, point.y)),
+  };
+}
+
+function expandCornersOutward(corners, width, height, factor = 1.035) {
+  if (!corners || corners.length !== 4) return corners;
+  const center = {
+    x: corners.reduce((sum, p) => sum + p.x, 0) / 4,
+    y: corners.reduce((sum, p) => sum + p.y, 0) / 4,
+  };
+  return corners.map((p) =>
+    clampOriginalPoint(
+      {
+        x: center.x + (p.x - center.x) * factor,
+        y: center.y + (p.y - center.y) * factor,
+      },
+      width,
+      height
+    )
+  );
+}
+
+function refineCornersByQuadrants(candidatePoints, fallbackCorners) {
+  if (!candidatePoints.length || !fallbackCorners || fallbackCorners.length !== 4) {
+    return fallbackCorners;
+  }
+
+  const center = {
+    x: fallbackCorners.reduce((sum, p) => sum + p.x, 0) / 4,
+    y: fallbackCorners.reduce((sum, p) => sum + p.y, 0) / 4,
+  };
+  const avgFallbackDist =
+    fallbackCorners.reduce((sum, p) => sum + Math.hypot(p.x - center.x, p.y - center.y), 0) / 4;
+  const minDist = avgFallbackDist * 0.55;
+  const picks = { tl: null, tr: null, br: null, bl: null };
+
+  for (const p of candidatePoints) {
+    const dx = p.x - center.x;
+    const dy = p.y - center.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < minDist) continue;
+
+    let quad = "";
+    let dirScore = 0;
+    if (dx <= 0 && dy <= 0) {
+      quad = "tl";
+      dirScore = -dx + -dy;
+    } else if (dx >= 0 && dy <= 0) {
+      quad = "tr";
+      dirScore = dx + -dy;
+    } else if (dx >= 0 && dy >= 0) {
+      quad = "br";
+      dirScore = dx + dy;
+    } else {
+      quad = "bl";
+      dirScore = -dx + dy;
+    }
+    const score = dirScore + dist * 0.35;
+    const current = picks[quad];
+    if (!current || score > current.score) {
+      picks[quad] = { point: p, score };
+    }
+  }
+
+  if (!picks.tl || !picks.tr || !picks.br || !picks.bl) {
+    return fallbackCorners;
+  }
+
+  return orderedCorners([picks.tl.point, picks.tr.point, picks.br.point, picks.bl.point]);
+}
+
 function getWorkingCanvasCorners() {
   if (state.corners.length === 4) {
     return orderedCorners(state.corners);
@@ -562,63 +638,111 @@ function autoDetectCorners() {
 
   const src = cv.imread(state.image);
   const gray = new cv.Mat();
-  const blur = new cv.Mat();
+  const denoised = new cv.Mat();
+  const contrasted = new cv.Mat();
+  const edgesRaw = new cv.Mat();
   const edges = new cv.Mat();
   const contours = new cv.MatVector();
   const hierarchy = new cv.Mat();
+  const morphKernel = cv.Mat.ones(3, 3, cv.CV_8U);
 
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-  cv.Canny(blur, edges, 70, 210);
+  cv.bilateralFilter(gray, denoised, 9, 75, 75, cv.BORDER_DEFAULT);
+  if (typeof cv.createCLAHE === "function") {
+    const clahe = cv.createCLAHE(2.0, new cv.Size(8, 8));
+    clahe.apply(denoised, contrasted);
+    clahe.delete();
+  } else {
+    denoised.copyTo(contrasted);
+  }
+  cv.Canny(contrasted, edgesRaw, 45, 140);
+  cv.morphologyEx(edgesRaw, edges, cv.MORPH_CLOSE, morphKernel);
+  cv.dilate(edges, edges, morphKernel, new cv.Point(-1, -1), 1);
   cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
   let bestContour = null;
-  let bestArea = 0;
+  let bestScore = 0;
+  const imageArea = src.cols * src.rows;
+  const minContourArea = imageArea * 0.08;
 
   for (let i = 0; i < contours.size(); i += 1) {
     const c = contours.get(i);
-    const perimeter = cv.arcLength(c, true);
-    const approx = new cv.Mat();
-    cv.approxPolyDP(c, approx, 0.02 * perimeter, true);
+    const areaRaw = Math.abs(cv.contourArea(c));
+    if (areaRaw < minContourArea) {
+      c.delete();
+      continue;
+    }
 
-    if (approx.rows === 4) {
+    const hull = new cv.Mat();
+    cv.convexHull(c, hull, false, true);
+    const perimeter = cv.arcLength(hull, true);
+    const approx = new cv.Mat();
+    cv.approxPolyDP(hull, approx, 0.02 * perimeter, true);
+
+    if (approx.rows === 4 && cv.isContourConvex(approx)) {
       const area = Math.abs(cv.contourArea(approx));
-      if (area > bestArea) {
+      const rect = cv.boundingRect(approx);
+      const extent = area / Math.max(1, rect.width * rect.height);
+      const score = area * (0.75 + extent);
+      if (score > bestScore) {
         if (bestContour) {
           bestContour.delete();
         }
-        bestContour = approx;
-        bestArea = area;
+        bestContour = approx.clone();
+        bestScore = score;
       } else {
-        approx.delete();
+        // no-op
       }
-    } else {
-      approx.delete();
     }
 
+    approx.delete();
+    hull.delete();
     c.delete();
   }
 
   if (!bestContour) {
     setStatus(cornerStatus, "Auto-detect failed. Click 4 corners manually.");
   } else {
-    const points = [];
+    const originalPoints = [];
     for (let i = 0; i < 4; i += 1) {
       const x = bestContour.intPtr(i, 0)[0];
       const y = bestContour.intPtr(i, 0)[1];
-      points.push(originalToCanvas({ x, y }));
+      originalPoints.push({ x, y });
     }
 
+    let candidatePoints = [];
+    if (typeof cv.goodFeaturesToTrack === "function") {
+      const cornersMat = new cv.Mat();
+      cv.goodFeaturesToTrack(edges, cornersMat, 160, 0.01, 8);
+      for (let i = 0; i < cornersMat.rows; i += 1) {
+        candidatePoints.push({
+          x: cornersMat.data32F[i * 2],
+          y: cornersMat.data32F[i * 2 + 1],
+        });
+      }
+      cornersMat.delete();
+    }
+
+    const orderedOriginal = orderedCorners(originalPoints);
+    const refinedOriginal = refineCornersByQuadrants(candidatePoints, orderedOriginal);
+    const expandedOriginal = expandCornersOutward(refinedOriginal, src.cols, src.rows, 1.035);
+    const points = expandedOriginal.map(originalToCanvas);
     state.corners = orderedCorners(points);
     drawSourceImage();
 
-    setStatus(cornerStatus, "Detected 4 corners automatically. Review and adjust if needed.");
+    setStatus(
+      cornerStatus,
+      "Detected corners automatically (enhanced edges + 4-quadrant refinement). Review and adjust if needed."
+    );
   }
 
   src.delete();
   gray.delete();
-  blur.delete();
+  denoised.delete();
+  contrasted.delete();
+  edgesRaw.delete();
   edges.delete();
+  morphKernel.delete();
   contours.delete();
   hierarchy.delete();
   if (bestContour) bestContour.delete();
@@ -700,6 +824,155 @@ function classifyStone(delta, blackThreshold, whiteThreshold) {
   return { color: "empty", property: "" };
 }
 
+function confidenceFromDelta(delta, color, blackThreshold, whiteThreshold) {
+  if (color === "black") {
+    const margin = delta - blackThreshold;
+    const scale = Math.max(6, blackThreshold * 0.55);
+    return Math.max(0, Math.min(1, margin / scale));
+  }
+  if (color === "white") {
+    const margin = -delta - whiteThreshold;
+    const scale = Math.max(6, whiteThreshold * 0.55);
+    return Math.max(0, Math.min(1, margin / scale));
+  }
+  return 0;
+}
+
+function rebalanceByConfidence(stones, minTotal = 31, imbalanceThreshold = 0.2) {
+  if (!stones || stones.length < minTotal) {
+    return { stones, removed: 0, dominant: "", initialImbalance: 0, finalImbalance: 0 };
+  }
+
+  let working = [...stones];
+  const countByColor = (arr, color) => arr.filter((s) => s.color === color).length;
+  const calcImbalance = (arr) => {
+    const b = countByColor(arr, "black");
+    const w = countByColor(arr, "white");
+    const total = b + w;
+    if (!total) return 0;
+    return Math.abs(b - w) / total;
+  };
+
+  const initialImbalance = calcImbalance(working);
+  if (initialImbalance < imbalanceThreshold) {
+    return { stones: working, removed: 0, dominant: "", initialImbalance, finalImbalance: initialImbalance };
+  }
+
+  const initialBlack = countByColor(working, "black");
+  const initialWhite = countByColor(working, "white");
+  const dominant = initialBlack >= initialWhite ? "black" : "white";
+  let removed = 0;
+
+  while (working.length >= minTotal) {
+    const imbalance = calcImbalance(working);
+    if (imbalance < imbalanceThreshold) break;
+
+    let weakestIdx = -1;
+    let weakestConfidence = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < working.length; i += 1) {
+      const stone = working[i];
+      if (stone.color !== dominant) continue;
+      const conf = Number.isFinite(stone.confidence) ? stone.confidence : 0;
+      if (conf < weakestConfidence) {
+        weakestConfidence = conf;
+        weakestIdx = i;
+      }
+    }
+    if (weakestIdx < 0) break;
+
+    working.splice(weakestIdx, 1);
+    removed += 1;
+  }
+
+  return {
+    stones: working,
+    removed,
+    dominant,
+    initialImbalance,
+    finalImbalance: calcImbalance(working),
+  };
+}
+
+function collectWhiteRescueStones(n, step, occupiedKeySet, whiteThreshold) {
+  if (!state.warpedImageData) return { stones: [], meta: null };
+
+  const rCore = Math.max(2, step * 0.22);
+  const rRimInner = step * 0.34;
+  const rRimOuter = step * 0.52;
+  const rBgInner = step * 0.62;
+  const rBgOuter = step * 0.82;
+  const metrics = [];
+
+  for (let row = 0; row < n; row += 1) {
+    for (let col = 0; col < n; col += 1) {
+      const key = `${row},${col}`;
+      if (occupiedKeySet.has(key)) continue;
+
+      const x = col * step;
+      const y = row * step;
+      const core = sampleCircleStats(state.warpedImageData, x, y, 0, rCore);
+      const rim = sampleCircleStats(state.warpedImageData, x, y, rRimInner, rRimOuter);
+      const bg = sampleCircleStats(state.warpedImageData, x, y, rBgInner, rBgOuter);
+      const delta = Number((bg - core).toFixed(2));
+      const rimDip = Number((((core + bg) / 2 - rim)).toFixed(2));
+      metrics.push({ row, col, x, y, core, rim, bg, delta, rimDip });
+    }
+  }
+
+  if (!metrics.length) return { stones: [], meta: null };
+
+  const rimMedian = median(metrics.map((m) => m.rimDip));
+  const rimThreshold = Math.max(6, rimMedian + 4);
+  const weakWhiteDelta = Math.max(6, whiteThreshold * 0.45);
+  const rescued = [];
+
+  for (const m of metrics) {
+    const weakWhite = -m.delta > weakWhiteDelta;
+    const outlineWhite =
+      m.core > 80 &&
+      m.core >= m.bg - 10 &&
+      m.rim <= m.core - 5 &&
+      m.rim <= m.bg - 2 &&
+      m.rimDip >= rimThreshold;
+    if (!weakWhite && !outlineWhite) continue;
+
+    const radius = estimateStoneRadius(state.warpedImageData, m.x, m.y, step, "white");
+    const weakConfidence = Math.max(0, Math.min(1, (-m.delta - weakWhiteDelta) / Math.max(6, weakWhiteDelta)));
+    const outlineConfidence = Math.max(0, Math.min(1, (m.rimDip - rimThreshold) / Math.max(4, rimThreshold * 0.45)));
+    const confidence = Number(Math.max(weakConfidence, outlineConfidence).toFixed(3));
+    rescued.push({
+      property: "AW",
+      color: "white",
+      imgCol: m.col,
+      imgRow: m.row,
+      imgX: m.x,
+      imgY: m.y,
+      col: m.col,
+      row: m.row,
+      coord: pointToSgfCoord(m.col, m.row, n),
+      delta: m.delta,
+      radius: Number(radius.toFixed(2)),
+      confidence,
+      source: "white-rescue",
+    });
+  }
+
+  return {
+    stones: rescued,
+    meta: {
+      considered: metrics.length,
+      rescued: rescued.length,
+      rimMedian: Number(rimMedian.toFixed(2)),
+      rimThreshold: Number(rimThreshold.toFixed(2)),
+      weakWhiteDelta: Number(weakWhiteDelta.toFixed(2)),
+    },
+  };
+}
+
+function detectionModeLabel(mode = state.detectionMode) {
+  return mode === "raw" ? "raw grayscale" : "preprocessed";
+}
+
 function estimateStoneRadius(imgData, cx, cy, step, color) {
   const centerMean = sampleCircleStats(imgData, cx, cy, 0, Math.max(2, step * 0.28));
   const bgMean = sampleCircleStats(imgData, cx, cy, step * 0.62, step * 0.82);
@@ -738,6 +1011,31 @@ function estimateStoneRadius(imgData, cx, cy, step, color) {
   return Number(Math.sqrt(count / Math.PI).toFixed(2));
 }
 
+function preprocessGrayForCircleDetection(grayInput) {
+  // Pipeline: edge-preserving denoise -> adaptive contrast -> sharpen.
+  const denoised = new cv.Mat();
+  const contrasted = new cv.Mat();
+  const sharpened = new cv.Mat();
+  const kernel = cv.matFromArray(3, 3, cv.CV_32F, [0, -1, 0, -1, 5, -1, 0, -1, 0]);
+
+  cv.bilateralFilter(grayInput, denoised, 9, 75, 75, cv.BORDER_DEFAULT);
+
+  if (typeof cv.createCLAHE === "function") {
+    const clahe = cv.createCLAHE(2.0, new cv.Size(8, 8));
+    clahe.apply(denoised, contrasted);
+    clahe.delete();
+  } else {
+    denoised.copyTo(contrasted);
+  }
+
+  cv.filter2D(contrasted, sharpened, cv.CV_8U, kernel, new cv.Point(-1, -1), 0, cv.BORDER_DEFAULT);
+
+  denoised.delete();
+  contrasted.delete();
+  kernel.delete();
+  return sharpened;
+}
+
 function detectCircleCandidatesFromGray(grayMat, step, roi = null) {
   const detectRoi = roi
     ? new cv.Rect(
@@ -748,8 +1046,11 @@ function detectCircleCandidatesFromGray(grayMat, step, roi = null) {
       )
     : null;
   const srcView = detectRoi ? grayMat.roi(detectRoi) : grayMat;
+  const preprocessed =
+    state.detectionMode === "preprocessed" ? preprocessGrayForCircleDetection(srcView) : null;
+  const detectInput = preprocessed || srcView;
   const blur = new cv.Mat();
-  cv.medianBlur(srcView, blur, 5);
+  cv.medianBlur(detectInput, blur, 5);
 
   const all = [];
   const minDist = Math.max(8, step * 0.72);
@@ -785,6 +1086,7 @@ function detectCircleCandidatesFromGray(grayMat, step, roi = null) {
   if (detectRoi) {
     srcView.delete();
   }
+  if (preprocessed) preprocessed.delete();
   blur.delete();
   return all;
 }
@@ -854,9 +1156,48 @@ function detectCircleCandidates(step) {
     tiledRaw,
     merged: merged.length,
     usedQuadrants: state.boardSize === 19,
+    mode: state.detectionMode,
   };
 
   return merged;
+}
+
+function buildDetectionGrayFromWarpedData() {
+  if (!state.warpedImageData) return null;
+
+  const temp = document.createElement("canvas");
+  temp.width = state.warpedImageData.width;
+  temp.height = state.warpedImageData.height;
+  const tctx = temp.getContext("2d");
+  tctx.putImageData(state.warpedImageData, 0, 0);
+
+  const src = cv.imread(temp);
+  const gray = new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  src.delete();
+
+  if (state.detectionMode !== "preprocessed") {
+    return gray;
+  }
+
+  const processed = preprocessGrayForCircleDetection(gray);
+  gray.delete();
+  return processed;
+}
+
+function renderDetectionModePreview() {
+  if (!state.warpedImageData) return false;
+  const detectionGray = buildDetectionGrayFromWarpedData();
+  if (!detectionGray) return false;
+
+  const rgba = new cv.Mat();
+  cv.cvtColor(detectionGray, rgba, cv.COLOR_GRAY2RGBA);
+  cv.imshow(warpCanvas, rgba);
+  drawWarpGrid();
+
+  detectionGray.delete();
+  rgba.delete();
+  return true;
 }
 
 function circlesToIntersections(circles, n, step) {
@@ -1115,6 +1456,7 @@ async function extractStones() {
       if (result.color === "empty") continue;
       const radius =
         point.r || estimateStoneRadius(state.warpedImageData, point.x, point.y, samplingStep, result.color);
+      const confidence = Number(confidenceFromDelta(delta, result.color, blackT, whiteT).toFixed(3));
 
       out.push({
         property: result.property,
@@ -1128,12 +1470,15 @@ async function extractStones() {
         coord: pointToSgfCoord(point.col, point.row, n),
         delta,
         radius: Number(radius.toFixed(2)),
+        confidence,
       });
     }
     return out;
   }
 
   let stones = [];
+  let whiteRescueMeta = null;
+  let confidenceRebalanceMeta = null;
   let autoBalanceNote = "";
   if (autoBalance) {
     setAutoBalanceBusy(true);
@@ -1172,6 +1517,25 @@ async function extractStones() {
     stones = classifyPointsWithThresholds(blackThreshold, whiteThreshold);
   }
 
+  if (stones.length) {
+    const occupied = new Set(stones.map((s) => `${s.imgRow},${s.imgCol}`));
+    const whiteRescue = collectWhiteRescueStones(n, boardStep, occupied, whiteThreshold);
+    whiteRescueMeta = whiteRescue.meta;
+    if (whiteRescue.stones.length) {
+      const byPoint = new Map(stones.map((s) => [`${s.imgRow},${s.imgCol}`, s]));
+      for (const extra of whiteRescue.stones) {
+        byPoint.set(`${extra.imgRow},${extra.imgCol}`, extra);
+      }
+      stones = [...byPoint.values()];
+    }
+  }
+
+  if (autoBalance && stones.length > 30) {
+    const rebalance = rebalanceByConfidence(stones, 31, 0.2);
+    stones = rebalance.stones;
+    confidenceRebalanceMeta = rebalance;
+  }
+
   state.manualEdits = {};
   state.rawStones = stones;
   if (stones.length) {
@@ -1189,13 +1553,21 @@ async function extractStones() {
   const det = state.lastDetectionMeta;
   const detectText =
     det && det.usedQuadrants
-      ? `Detection: base=${det.baseRaw}, tiled=${det.tiledRaw}, merged=${det.merged}. `
+      ? `Detection (${detectionModeLabel(det.mode)}): base=${det.baseRaw}, tiled=${det.tiledRaw}, merged=${det.merged}. `
       : det
-      ? `Detection: base=${det.baseRaw}, merged=${det.merged}. `
+      ? `Detection (${detectionModeLabel(det.mode)}): base=${det.baseRaw}, merged=${det.merged}. `
+      : "";
+  const whiteRescueText =
+    whiteRescueMeta && whiteRescueMeta.rescued > 0
+      ? ` White rescue added ${whiteRescueMeta.rescued} candidates (rim threshold ${whiteRescueMeta.rimThreshold}).`
+      : "";
+  const confidenceRebalanceText =
+    confidenceRebalanceMeta && confidenceRebalanceMeta.removed > 0
+      ? ` Confidence rebalance removed ${confidenceRebalanceMeta.removed} low-confidence ${confidenceRebalanceMeta.dominant} stones (imbalance ${Math.round(confidenceRebalanceMeta.initialImbalance * 100)}% -> ${Math.round(confidenceRebalanceMeta.finalImbalance * 100)}%).`
       : "";
   setStatus(
     sgfStatus,
-    `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Thresholds: B=${blackThreshold}, W=${whiteThreshold}.${autoBalanceNote}`
+    `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Thresholds: B=${blackThreshold}, W=${whiteThreshold}.${autoBalanceNote}${whiteRescueText}${confidenceRebalanceText}`
   );
   state.extracting = false;
 }
@@ -1380,6 +1752,23 @@ autoBalanceCheckbox.addEventListener("change", () => {
   setStatus(
     extractStatus,
     `Auto balance ${autoBalanceCheckbox.checked ? "enabled" : "disabled"}. Re-extract to apply.`
+  );
+});
+detectionModeSelect.addEventListener("change", () => {
+  const selected = detectionModeSelect.value === "raw" ? "raw" : "preprocessed";
+  state.detectionMode = selected;
+  let previewShown = false;
+  if (!state.warpedImageData && state.imageLoaded) {
+    warpBoardFromCorners();
+  }
+  if (state.warpedImageData) {
+    previewShown = renderDetectionModePreview();
+  }
+  setStatus(
+    extractStatus,
+    previewShown
+      ? `Detection mode set to ${detectionModeLabel(selected)}. Showing detection preview on warped board; re-extract to update stones.`
+      : `Detection mode set to ${detectionModeLabel(selected)}. Re-extract to apply.`
   );
 });
 
@@ -1570,4 +1959,5 @@ updateShiftLabel();
 updateEditToolUI();
 blackThresholdInput.value = String(DEFAULT_BLACK_THRESHOLD);
 whiteThresholdInput.value = String(DEFAULT_WHITE_THRESHOLD);
-autoBalanceCheckbox.checked = false;
+autoBalanceCheckbox.checked = true;
+detectionModeSelect.value = state.detectionMode;
