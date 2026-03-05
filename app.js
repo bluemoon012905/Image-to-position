@@ -46,7 +46,6 @@ const boardAnchorSelect = document.getElementById("boardAnchorSelect");
 const cornerStatus = document.getElementById("cornerStatus");
 const extractStatus = document.getElementById("extractStatus");
 const sgfStatus = document.getElementById("sgfStatus");
-const stoneTableBody = document.getElementById("stoneTableBody");
 const sgfOutput = document.getElementById("sgfOutput");
 const gameNameInput = document.getElementById("gameName");
 const komiInput = document.getElementById("komiInput");
@@ -833,12 +832,7 @@ function renderWarpAndStoneMarkers(stones, step) {
 }
 
 function renderStoneTable(stones) {
-  stoneTableBody.innerHTML = "";
-  stones.forEach((stone) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${stone.coord}</td><td>${stone.property}[${stone.coord}]</td><td>${stone.color}</td>`;
-    stoneTableBody.appendChild(tr);
-  });
+  void stones;
 }
 
 function resolveAutoAnchor() {
@@ -1107,7 +1101,6 @@ function resetStateForNewImage() {
 
   clearCanvas(warpCtx, warpCanvas);
   drawSgfPreview([], state.boardSize);
-  stoneTableBody.innerHTML = "";
   sgfOutput.value = "";
   setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
   setStatus(sgfStatus, "No SGF generated yet.");
@@ -1262,7 +1255,6 @@ resetCornersBtn.addEventListener("click", () => {
   state.warpedImageData = null;
   drawSourceImage();
   clearCanvas(warpCtx, warpCanvas);
-  stoneTableBody.innerHTML = "";
   setStatus(cornerStatus, "Corners reset.");
   setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
   updateShiftLabel();
