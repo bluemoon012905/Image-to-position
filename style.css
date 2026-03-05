@@ -253,12 +253,12 @@ textarea {
     align-items: start;
   }
 
-  #step1-card {
+  #step1-card,
+  #step3-card {
     grid-column: span 2;
   }
 
-  #step2-card,
-  #step3-card {
+  #step2-card {
     grid-column: span 1;
   }
 }

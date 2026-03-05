@@ -47,11 +47,20 @@ const stoneTableBody = document.getElementById("stoneTableBody");
 const sgfOutput = document.getElementById("sgfOutput");
 const gameNameInput = document.getElementById("gameName");
 const komiInput = document.getElementById("komiInput");
+const sgfShiftYInput = document.getElementById("sgfShiftY");
+const sgfShiftYValue = document.getElementById("sgfShiftYValue");
 
 const LETTERS = "abcdefghijklmnopqrstuvwxyz";
 
 function setStatus(el, message) {
   el.textContent = message;
+}
+
+function updateSgfShiftLabel() {
+  const shiftY = Number(sgfShiftYInput?.value || 0);
+  if (sgfShiftYValue) {
+    sgfShiftYValue.textContent = `Shift: ${shiftY}`;
+  }
 }
 
 function clearCanvas(ctx, canvas) {
@@ -724,7 +733,8 @@ function remapStonesToAnchor(stones, n, anchorMode) {
     const imgCol = stone.imgCol ?? stone.col;
     const imgRow = stone.imgRow ?? stone.row;
     const col = Math.max(0, Math.min(n - 1, offsetCol + (imgCol - minCol)));
-    const row = Math.max(0, Math.min(n - 1, offsetRow + (imgRow - minRow)));
+    const shiftY = Number(sgfShiftYInput?.value || 0);
+    const row = Math.max(0, Math.min(n - 1, offsetRow + (imgRow - minRow) + shiftY));
     return {
       ...stone,
       imgCol,
@@ -786,9 +796,10 @@ function applySizeFilter() {
   const whiteCount = mapped.filter((s) => s.color === "white").length;
   const anchorResolved = boardAnchorSelect.value === "auto" ? resolveAutoAnchor() : boardAnchorSelect.value;
   const sizeLabel = selected === "all" ? "all sizes" : `size bucket r~${Number(selected).toFixed(1)}px`;
+  const shiftY = Number(sgfShiftYInput?.value || 0);
   setStatus(
     extractStatus,
-    `Showing ${mapped.length} stones (${blackCount} black, ${whiteCount} white) using ${sizeLabel}, anchor=${anchorResolved}.`
+    `Showing ${mapped.length} stones (${blackCount} black, ${whiteCount} white) using ${sizeLabel}, anchor=${anchorResolved}, y-shift=${shiftY}.`
   );
 }
 
@@ -1146,6 +1157,8 @@ extractBtn.addEventListener("click", extractStones);
 applySizeFilterBtn.addEventListener("click", applySizeFilter);
 sizeBucketSelect.addEventListener("change", applySizeFilter);
 boardAnchorSelect.addEventListener("change", applySizeFilter);
+sgfShiftYInput.addEventListener("input", applySizeFilter);
+sgfShiftYInput.addEventListener("input", updateSgfShiftLabel);
 generateBtn.addEventListener("click", generateSgf);
 downloadBtn.addEventListener("click", downloadSgf);
 
@@ -1161,3 +1174,4 @@ function waitForCv() {
 waitForCv();
 drawSgfPreview([], state.boardSize);
 updateCropModeUI();
+updateSgfShiftLabel();
