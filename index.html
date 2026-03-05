@@ -131,12 +131,24 @@
             <button id="downloadBtn" type="button" class="ghost">Download .sgf</button>
           </div>
 
-          <div class="controls-row">
-            <label>
-              Vertical shift (up/down)
-              <input id="sgfShiftY" type="range" min="-18" max="18" step="1" value="0" />
-            </label>
-            <p class="status" id="sgfShiftYValue">Shift: 0</p>
+          <div class="controls-row sgf-tool-row">
+            <button id="toolBlackBtn" type="button" class="ghost">Add black</button>
+            <button id="toolWhiteBtn" type="button" class="ghost">Add white</button>
+            <button id="toolEraseBtn" type="button" class="ghost">Remove</button>
+            <p class="status" id="editToolStatus">Tool: remove</p>
+          </div>
+
+          <div class="controls-row sgf-tool-row">
+            <div class="dpad-wrap" aria-label="Shift controls">
+              <button id="shiftUpBtn" type="button" class="ghost dpad-btn">Up</button>
+              <div class="dpad-mid">
+                <button id="shiftLeftBtn" type="button" class="ghost dpad-btn">Left</button>
+                <button id="shiftResetBtn" type="button" class="ghost dpad-btn">Center</button>
+                <button id="shiftRightBtn" type="button" class="ghost dpad-btn">Right</button>
+              </div>
+              <button id="shiftDownBtn" type="button" class="ghost dpad-btn">Down</button>
+            </div>
+            <p class="status" id="shiftValue">Shift: x=0, y=0</p>
           </div>
 
           <div class="sgf-studio">

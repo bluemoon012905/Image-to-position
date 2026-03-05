@@ -247,6 +247,25 @@ textarea {
   background: rgba(255, 255, 255, 0.92);
 }
 
+.sgf-tool-row {
+  align-items: center;
+}
+
+.dpad-wrap {
+  display: grid;
+  gap: 0.35rem;
+  justify-items: center;
+}
+
+.dpad-mid {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.dpad-btn {
+  min-width: 4.5rem;
+}
+
 @media (min-width: 1040px) {
   .steps {
     grid-template-columns: repeat(3, minmax(0, 1fr));

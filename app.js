@@ -10,6 +10,10 @@ const state = {
   cropRect: null,
   cropDragStart: null,
   isCropping: false,
+  shiftX: 0,
+  shiftY: 0,
+  editTool: "erase",
+  manualEdits: {},
   rawStones: [],
   stones: [],
 };
@@ -44,8 +48,16 @@ const stoneTableBody = document.getElementById("stoneTableBody");
 const sgfOutput = document.getElementById("sgfOutput");
 const gameNameInput = document.getElementById("gameName");
 const komiInput = document.getElementById("komiInput");
-const sgfShiftYInput = document.getElementById("sgfShiftY");
-const sgfShiftYValue = document.getElementById("sgfShiftYValue");
+const toolBlackBtn = document.getElementById("toolBlackBtn");
+const toolWhiteBtn = document.getElementById("toolWhiteBtn");
+const toolEraseBtn = document.getElementById("toolEraseBtn");
+const editToolStatus = document.getElementById("editToolStatus");
+const shiftUpBtn = document.getElementById("shiftUpBtn");
+const shiftDownBtn = document.getElementById("shiftDownBtn");
+const shiftLeftBtn = document.getElementById("shiftLeftBtn");
+const shiftRightBtn = document.getElementById("shiftRightBtn");
+const shiftResetBtn = document.getElementById("shiftResetBtn");
+const shiftValue = document.getElementById("shiftValue");
 
 const LETTERS = "abcdefghijklmnopqrstuvwxyz";
 
@@ -53,11 +65,89 @@ function setStatus(el, message) {
   el.textContent = message;
 }
 
-function updateSgfShiftLabel() {
-  const shiftY = Number(sgfShiftYInput?.value || 0);
-  if (sgfShiftYValue) {
-    sgfShiftYValue.textContent = `Shift: ${shiftY}`;
+function updateShiftLabel() {
+  if (shiftValue) {
+    shiftValue.textContent = `Shift: x=${state.shiftX}, y=${state.shiftY}`;
   }
+}
+
+function updateEditToolUI() {
+  toolBlackBtn.classList.toggle("toggle-active", state.editTool === "black");
+  toolWhiteBtn.classList.toggle("toggle-active", state.editTool === "white");
+  toolEraseBtn.classList.toggle("toggle-active", state.editTool === "erase");
+  if (editToolStatus) {
+    const text = state.editTool === "erase" ? "remove" : `add ${state.editTool}`;
+    editToolStatus.textContent = `Tool: ${text}`;
+  }
+}
+
+function setEditTool(tool) {
+  state.editTool = tool;
+  updateEditToolUI();
+}
+
+function propertyForColor(color) {
+  if (color === "black") return "AB";
+  if (color === "white") return "AW";
+  return "";
+}
+
+function applyManualEdits(stones, n) {
+  const map = new Map();
+  for (const stone of stones) {
+    map.set(`${stone.row},${stone.col}`, { ...stone });
+  }
+
+  for (const [key, color] of Object.entries(state.manualEdits)) {
+    const [rowStr, colStr] = key.split(",");
+    const row = Number(rowStr);
+    const col = Number(colStr);
+    if (row < 0 || col < 0 || row >= n || col >= n) continue;
+
+    if (color === "empty") {
+      map.delete(key);
+      continue;
+    }
+
+    map.set(key, {
+      property: propertyForColor(color),
+      color,
+      imgCol: col,
+      imgRow: row,
+      col,
+      row,
+      coord: pointToSgfCoord(col, row, n),
+      delta: 0,
+      radius: 0,
+    });
+  }
+
+  return [...map.values()].sort((a, b) => a.row - b.row || a.col - b.col);
+}
+
+function getPreviewBoardPoint(event) {
+  const n = state.boardSize;
+  const rect = sgfPreviewCanvas.getBoundingClientRect();
+  const px = ((event.clientX - rect.left) * sgfPreviewCanvas.width) / rect.width;
+  const py = ((event.clientY - rect.top) * sgfPreviewCanvas.height) / rect.height;
+  const size = Math.min(sgfPreviewCanvas.width, sgfPreviewCanvas.height);
+  const margin = Math.round(size * 0.08);
+  const boardArea = size - margin * 2;
+  const step = boardArea / (n - 1);
+  const offsetX = (sgfPreviewCanvas.width - size) / 2;
+  const offsetY = (sgfPreviewCanvas.height - size) / 2;
+
+  const lx = px - offsetX;
+  const ly = py - offsetY;
+  const col = Math.round((lx - margin) / step);
+  const row = Math.round((ly - margin) / step);
+  if (col < 0 || row < 0 || col >= n || row >= n) return null;
+
+  const gx = margin + col * step;
+  const gy = margin + row * step;
+  const dist = Math.hypot(lx - gx, ly - gy);
+  if (dist > step * 0.52) return null;
+  return { row, col };
 }
 
 function clearCanvas(ctx, canvas) {
@@ -713,9 +803,8 @@ function remapStonesToAnchor(stones, n, anchorMode) {
   return stones.map((stone) => {
     const imgCol = stone.imgCol ?? stone.col;
     const imgRow = stone.imgRow ?? stone.row;
-    const col = Math.max(0, Math.min(n - 1, offsetCol + (imgCol - minCol)));
-    const shiftY = Number(sgfShiftYInput?.value || 0);
-    const row = Math.max(0, Math.min(n - 1, offsetRow + (imgRow - minRow) + shiftY));
+    const col = Math.max(0, Math.min(n - 1, offsetCol + (imgCol - minCol) + state.shiftX));
+    const row = Math.max(0, Math.min(n - 1, offsetRow + (imgRow - minRow) + state.shiftY));
     return {
       ...stone,
       imgCol,
@@ -728,7 +817,7 @@ function remapStonesToAnchor(stones, n, anchorMode) {
 }
 
 function applyPositionMapping() {
-  if (!state.rawStones.length || !state.warpedImageData) {
+  if (!state.warpedImageData) {
     setStatus(extractStatus, "Run extraction first.");
     return;
   }
@@ -737,18 +826,19 @@ function applyPositionMapping() {
   const size = warpCanvas.width;
   const step = (size - 1) / (n - 1);
   const mapped = remapStonesToAnchor(state.rawStones, n, boardAnchorSelect.value);
-  state.stones = mapped;
+  const edited = applyManualEdits(mapped, n);
+  state.stones = edited;
   renderWarpAndStoneMarkers(state.rawStones, step);
-  renderStoneTable(mapped);
-  drawSgfPreview(mapped, n);
+  renderStoneTable(edited);
+  drawSgfPreview(edited, n);
 
-  const blackCount = mapped.filter((s) => s.color === "black").length;
-  const whiteCount = mapped.filter((s) => s.color === "white").length;
+  const blackCount = edited.filter((s) => s.color === "black").length;
+  const whiteCount = edited.filter((s) => s.color === "white").length;
   const anchorResolved = boardAnchorSelect.value === "auto" ? resolveAutoAnchor() : boardAnchorSelect.value;
-  const shiftY = Number(sgfShiftYInput?.value || 0);
+  updateShiftLabel();
   setStatus(
     extractStatus,
-    `Showing ${mapped.length} stones (${blackCount} black, ${whiteCount} white), anchor=${anchorResolved}, y-shift=${shiftY}.`
+    `Showing ${edited.length} stones (${blackCount} black, ${whiteCount} white), anchor=${anchorResolved}, shift=(${state.shiftX},${state.shiftY}).`
   );
 }
 
@@ -765,6 +855,7 @@ function extractStones() {
   const circleCandidates = detectCircleCandidates(step);
   const points = circlesToIntersections(circleCandidates, n, step);
   if (!points.length) {
+    state.manualEdits = {};
     state.rawStones = [];
     state.stones = [];
     renderWarpAndStoneMarkers([], step);
@@ -802,6 +893,7 @@ function extractStones() {
     });
   }
 
+  state.manualEdits = {};
   state.rawStones = stones;
   if (stones.length) {
     applyPositionMapping();
@@ -906,6 +998,9 @@ function resetStateForNewImage() {
   state.cropRect = null;
   state.cropDragStart = null;
   state.isCropping = false;
+  state.shiftX = 0;
+  state.shiftY = 0;
+  state.manualEdits = {};
   state.rawStones = [];
   state.stones = [];
   state.warpedImageData = null;
@@ -917,6 +1012,8 @@ function resetStateForNewImage() {
   setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
   setStatus(sgfStatus, "No SGF generated yet.");
   updateCropModeUI();
+  updateShiftLabel();
+  updateEditToolUI();
 }
 
 function loadImageFromBlob(blob, sourceLabel) {
@@ -1051,6 +1148,9 @@ autoCornersBtn.addEventListener("click", () => {
 resetCornersBtn.addEventListener("click", () => {
   state.corners = [];
   state.activeCorners = [];
+  state.shiftX = 0;
+  state.shiftY = 0;
+  state.manualEdits = {};
   state.rawStones = [];
   state.stones = [];
   state.warpedImageData = null;
@@ -1059,6 +1159,7 @@ resetCornersBtn.addEventListener("click", () => {
   stoneTableBody.innerHTML = "";
   setStatus(cornerStatus, "Corners reset.");
   setStatus(extractStatus, "Set corners (4 for full board, 2 for zoomed box), then extract stones.");
+  updateShiftLabel();
 });
 
 cropModeBtn.addEventListener("click", () => {
@@ -1096,8 +1197,42 @@ cancelCropBtn.addEventListener("click", () => {
 
 extractBtn.addEventListener("click", extractStones);
 boardAnchorSelect.addEventListener("change", applyPositionMapping);
-sgfShiftYInput.addEventListener("input", applyPositionMapping);
-sgfShiftYInput.addEventListener("input", updateSgfShiftLabel);
+toolBlackBtn.addEventListener("click", () => setEditTool("black"));
+toolWhiteBtn.addEventListener("click", () => setEditTool("white"));
+toolEraseBtn.addEventListener("click", () => setEditTool("erase"));
+sgfPreviewCanvas.addEventListener("click", (event) => {
+  if (!state.warpedImageData) return;
+  const point = getPreviewBoardPoint(event);
+  if (!point) return;
+  const key = `${point.row},${point.col}`;
+  if (state.editTool === "erase") {
+    state.manualEdits[key] = "empty";
+  } else {
+    state.manualEdits[key] = state.editTool;
+  }
+  applyPositionMapping();
+});
+shiftUpBtn.addEventListener("click", () => {
+  state.shiftY -= 1;
+  applyPositionMapping();
+});
+shiftDownBtn.addEventListener("click", () => {
+  state.shiftY += 1;
+  applyPositionMapping();
+});
+shiftLeftBtn.addEventListener("click", () => {
+  state.shiftX -= 1;
+  applyPositionMapping();
+});
+shiftRightBtn.addEventListener("click", () => {
+  state.shiftX += 1;
+  applyPositionMapping();
+});
+shiftResetBtn.addEventListener("click", () => {
+  state.shiftX = 0;
+  state.shiftY = 0;
+  applyPositionMapping();
+});
 generateBtn.addEventListener("click", generateSgf);
 downloadBtn.addEventListener("click", downloadSgf);
 
@@ -1113,4 +1248,5 @@ function waitForCv() {
 waitForCv();
 drawSgfPreview([], state.boardSize);
 updateCropModeUI();
-updateSgfShiftLabel();
+updateShiftLabel();
+updateEditToolUI();
