@@ -5,7 +5,9 @@ const state = {
   corners: [],
   cvReady: false,
   warpedImageData: null,
+  rawStones: [],
   stones: [],
+  sizeBuckets: [],
 };
 
 const sourceCanvas = document.getElementById("sourceCanvas");
@@ -20,9 +22,11 @@ const resetCornersBtn = document.getElementById("resetCornersBtn");
 const extractBtn = document.getElementById("extractBtn");
 const generateBtn = document.getElementById("generateBtn");
 const downloadBtn = document.getElementById("downloadBtn");
+const applySizeFilterBtn = document.getElementById("applySizeFilterBtn");
 
 const blackThresholdInput = document.getElementById("blackThreshold");
 const whiteThresholdInput = document.getElementById("whiteThreshold");
+const sizeBucketSelect = document.getElementById("sizeBucketSelect");
 
 const cornerStatus = document.getElementById("cornerStatus");
 const extractStatus = document.getElementById("extractStatus");
@@ -341,6 +345,142 @@ function classifyStone(delta, blackThreshold, whiteThreshold) {
   return { color: "empty", property: "" };
 }
 
+function estimateStoneRadius(imgData, cx, cy, step, color) {
+  const centerMean = sampleCircleStats(imgData, cx, cy, 0, Math.max(2, step * 0.28));
+  const bgMean = sampleCircleStats(imgData, cx, cy, step * 0.62, step * 0.82);
+  const maxR = Math.max(3, Math.floor(step * 0.72));
+  const threshold = Math.max(10, Math.abs(bgMean - centerMean) * 0.35);
+  const { data, width, height } = imgData;
+
+  let count = 0;
+  const minX = Math.max(0, Math.floor(cx - maxR));
+  const maxX = Math.min(width - 1, Math.ceil(cx + maxR));
+  const minY = Math.max(0, Math.floor(cy - maxR));
+  const maxY = Math.min(height - 1, Math.ceil(cy + maxR));
+
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      const dx = x - cx;
+      const dy = y - cy;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d > maxR) continue;
+
+      const idx = (y * width + x) * 4;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const brightness = 0.299 * r + 0.587 * g + 0.114 * b;
+
+      if (color === "black" && brightness < bgMean - threshold) {
+        count += 1;
+      } else if (color === "white" && brightness > bgMean + threshold) {
+        count += 1;
+      }
+    }
+  }
+
+  if (!count) return 0;
+  return Number(Math.sqrt(count / Math.PI).toFixed(2));
+}
+
+function renderWarpAndStoneMarkers(stones, step) {
+  if (!state.warpedImageData) return;
+  warpCtx.putImageData(state.warpedImageData, 0, 0);
+  drawWarpGrid();
+
+  warpCtx.save();
+  stones.forEach((stone) => {
+    const x = stone.col * step;
+    const y = stone.row * step;
+    warpCtx.beginPath();
+    warpCtx.arc(x, y, Math.max(3, step * 0.16), 0, Math.PI * 2);
+    warpCtx.fillStyle = stone.color === "black" ? "rgba(13,13,13,0.78)" : "rgba(255,255,255,0.9)";
+    warpCtx.fill();
+    warpCtx.strokeStyle = "rgba(20,20,20,0.75)";
+    warpCtx.lineWidth = 1;
+    warpCtx.stroke();
+  });
+  warpCtx.restore();
+}
+
+function renderStoneTable(stones) {
+  stoneTableBody.innerHTML = "";
+  stones.forEach((stone) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${stone.coord}</td><td>${stone.property}[${stone.coord}]</td><td>${stone.color}</td>`;
+    stoneTableBody.appendChild(tr);
+  });
+}
+
+function buildSizeBuckets(stones, step) {
+  const bucketWidth = Math.max(1.5, step * 0.08);
+  const map = new Map();
+
+  for (const stone of stones) {
+    const bucketCenter = Math.round(stone.radius / bucketWidth) * bucketWidth;
+    const key = bucketCenter.toFixed(2);
+    if (!map.has(key)) {
+      map.set(key, { key, center: Number(key), count: 0 });
+    }
+    map.get(key).count += 1;
+  }
+
+  return [...map.values()].sort((a, b) => b.count - a.count);
+}
+
+function fillSizeBucketSelect(buckets) {
+  sizeBucketSelect.innerHTML = "";
+
+  const allOpt = document.createElement("option");
+  allOpt.value = "all";
+  allOpt.textContent = "All detected sizes";
+  sizeBucketSelect.appendChild(allOpt);
+
+  buckets.forEach((bucket) => {
+    const opt = document.createElement("option");
+    opt.value = bucket.key;
+    opt.textContent = `r~${bucket.center.toFixed(1)}px (${bucket.count} stones)`;
+    sizeBucketSelect.appendChild(opt);
+  });
+
+  if (buckets.length > 0) {
+    sizeBucketSelect.value = buckets[0].key;
+  } else {
+    sizeBucketSelect.value = "all";
+  }
+}
+
+function applySizeFilter() {
+  if (!state.rawStones.length || !state.warpedImageData) {
+    setStatus(extractStatus, "Run extraction first.");
+    return;
+  }
+
+  const n = state.boardSize;
+  const size = warpCanvas.width;
+  const step = (size - 1) / (n - 1);
+  const selected = sizeBucketSelect.value;
+  const tolerance = Math.max(1.4, step * 0.06);
+
+  let filtered = state.rawStones;
+  if (selected !== "all") {
+    const center = Number(selected);
+    filtered = state.rawStones.filter((stone) => Math.abs(stone.radius - center) <= tolerance);
+  }
+
+  state.stones = filtered;
+  renderWarpAndStoneMarkers(filtered, step);
+  renderStoneTable(filtered);
+
+  const blackCount = filtered.filter((s) => s.color === "black").length;
+  const whiteCount = filtered.filter((s) => s.color === "white").length;
+  const sizeLabel = selected === "all" ? "all sizes" : `size bucket r~${Number(selected).toFixed(1)}px`;
+  setStatus(
+    extractStatus,
+    `Showing ${filtered.length} stones (${blackCount} black, ${whiteCount} white) using ${sizeLabel}.`
+  );
+}
+
 function extractStones() {
   const warped = warpBoardFromCorners();
   if (!warped || !state.warpedImageData) {
@@ -409,10 +549,10 @@ function extractStones() {
   }
 
   const stones = [];
-  const markers = [];
   for (const point of points) {
     const result = classifyStone(point.delta, bestBlackThreshold, bestWhiteThreshold);
     if (result.color === "empty") continue;
+    const radius = estimateStoneRadius(state.warpedImageData, point.x, point.y, step, result.color);
 
     stones.push({
       coord: point.coord,
@@ -421,39 +561,20 @@ function extractStones() {
       col: point.col,
       row: point.row,
       delta: point.delta,
+      radius,
     });
-    markers.push({ x: point.x, y: point.y, color: result.color });
   }
 
   blackThresholdInput.value = String(bestBlackThreshold);
   whiteThresholdInput.value = String(bestWhiteThreshold);
-  state.stones = stones;
-
-  warpCtx.putImageData(state.warpedImageData, 0, 0);
-  drawWarpGrid();
-
-  warpCtx.save();
-  markers.forEach((m) => {
-    warpCtx.beginPath();
-    warpCtx.arc(m.x, m.y, Math.max(3, step * 0.16), 0, Math.PI * 2);
-    warpCtx.fillStyle = m.color === "black" ? "rgba(13,13,13,0.78)" : "rgba(255,255,255,0.9)";
-    warpCtx.fill();
-    warpCtx.strokeStyle = "rgba(20,20,20,0.75)";
-    warpCtx.lineWidth = 1;
-    warpCtx.stroke();
-  });
-  warpCtx.restore();
-
-  stoneTableBody.innerHTML = "";
-  stones.forEach((stone) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${stone.coord}</td><td>${stone.property}[${stone.coord}]</td><td>${stone.color}</td>`;
-    stoneTableBody.appendChild(tr);
-  });
+  state.rawStones = stones;
+  state.sizeBuckets = buildSizeBuckets(stones, step);
+  fillSizeBucketSelect(state.sizeBuckets);
+  applySizeFilter();
 
   setStatus(
-    extractStatus,
-    `Scanned all threshold pairs (10..90). Best hit: ${stones.length} stones (${bestBlackCount} black, ${bestWhiteCount} white) using black=${bestBlackThreshold}, white=${bestWhiteThreshold}.`
+    sgfStatus,
+    `Raw scan complete: ${stones.length} stones at black=${bestBlackThreshold}, white=${bestWhiteThreshold}. Use size bucket filter to reduce false positives.`
   );
 }
 
@@ -505,12 +626,15 @@ imageInput.addEventListener("change", (event) => {
     state.image = img;
     state.imageLoaded = true;
     state.corners = [];
+    state.rawStones = [];
     state.stones = [];
+    state.sizeBuckets = [];
     state.warpedImageData = null;
 
     drawSourceImage();
     clearCanvas(warpCtx, warpCanvas);
     stoneTableBody.innerHTML = "";
+    fillSizeBucketSelect([]);
 
     setStatus(cornerStatus, "Image loaded. Select corners or run auto-detect.");
     setStatus(extractStatus, "Set 4 corners, then extract stones.");
@@ -560,14 +684,21 @@ autoCornersBtn.addEventListener("click", () => {
 
 resetCornersBtn.addEventListener("click", () => {
   state.corners = [];
+  state.rawStones = [];
+  state.stones = [];
+  state.sizeBuckets = [];
   state.warpedImageData = null;
   drawSourceImage();
   clearCanvas(warpCtx, warpCanvas);
+  stoneTableBody.innerHTML = "";
+  fillSizeBucketSelect([]);
   setStatus(cornerStatus, "Corners reset.");
   setStatus(extractStatus, "Set 4 corners, then extract stones.");
 });
 
 extractBtn.addEventListener("click", extractStones);
+applySizeFilterBtn.addEventListener("click", applySizeFilter);
+sizeBucketSelect.addEventListener("change", applySizeFilter);
 generateBtn.addEventListener("click", generateSgf);
 downloadBtn.addEventListener("click", downloadSgf);
 
