@@ -862,12 +862,43 @@ function estimatePuzzleGrid(circles, imageSize) {
 
   if (!step || step < 6) return null;
 
-  const minX = Math.min(...circles.map((c) => c.x));
-  const maxX = Math.max(...circles.map((c) => c.x));
-  const minY = Math.min(...circles.map((c) => c.y));
-  const maxY = Math.max(...circles.map((c) => c.y));
-  const visibleCols = Math.max(2, Math.round((maxX - minX) / step) + 1);
-  const visibleRows = Math.max(2, Math.round((maxY - minY) / step) + 1);
+  let minX = Math.min(...circles.map((c) => c.x));
+  let maxX = Math.max(...circles.map((c) => c.x));
+  let minY = Math.min(...circles.map((c) => c.y));
+  let maxY = Math.max(...circles.map((c) => c.y));
+  let visibleCols = Math.max(2, Math.round((maxX - minX) / step) + 1);
+  let visibleRows = Math.max(2, Math.round((maxY - minY) / step) + 1);
+
+  // Refine step/origin by snapping circles to coarse bins, then averaging each bin center.
+  const xBins = new Map();
+  const yBins = new Map();
+  for (const c of circles) {
+    const col = Math.round((c.x - minX) / step);
+    const row = Math.round((c.y - minY) / step);
+    if (!xBins.has(col)) xBins.set(col, []);
+    if (!yBins.has(row)) yBins.set(row, []);
+    xBins.get(col).push(c.x);
+    yBins.get(row).push(c.y);
+  }
+  const xCenters = [...xBins.keys()]
+    .sort((a, b) => a - b)
+    .map((k) => median(xBins.get(k)));
+  const yCenters = [...yBins.keys()]
+    .sort((a, b) => a - b)
+    .map((k) => median(yBins.get(k)));
+  const xSteps = [];
+  const ySteps = [];
+  for (let i = 1; i < xCenters.length; i += 1) xSteps.push(xCenters[i] - xCenters[i - 1]);
+  for (let i = 1; i < yCenters.length; i += 1) ySteps.push(yCenters[i] - yCenters[i - 1]);
+  const refined = median([...xSteps, ...ySteps].filter((d) => d > 3));
+  if (refined) step = refined;
+
+  minX = xCenters.length ? xCenters[0] : minX;
+  maxX = xCenters.length ? xCenters[xCenters.length - 1] : maxX;
+  minY = yCenters.length ? yCenters[0] : minY;
+  maxY = yCenters.length ? yCenters[yCenters.length - 1] : maxY;
+  visibleCols = Math.max(2, xCenters.length || Math.round((maxX - minX) / step) + 1);
+  visibleRows = Math.max(2, yCenters.length || Math.round((maxY - minY) / step) + 1);
 
   const bestByPoint = new Map();
   for (const circle of circles) {
@@ -896,6 +927,10 @@ function estimatePuzzleGrid(circles, imageSize) {
 
   return {
     step,
+    minX,
+    minY,
+    maxX,
+    maxY,
     visibleCols,
     visibleRows,
     points: [...bestByPoint.values()],
@@ -903,8 +938,41 @@ function estimatePuzzleGrid(circles, imageSize) {
 }
 
 function getActiveWarpGridOverride() {
-  if (!state.puzzleMode || !state.detectedPuzzleGrid) return null;
-  const g = state.detectedPuzzleGrid;
+  if (!state.puzzleMode) return null;
+
+  let g = state.detectedPuzzleGrid;
+  if (!g && state.rawStones.length) {
+    const xs = state.rawStones.map((s) => s.imgX).filter((v) => Number.isFinite(v));
+    const ys = state.rawStones.map((s) => s.imgY).filter((v) => Number.isFinite(v));
+    if (xs.length >= 2 && ys.length >= 2) {
+      const xSorted = [...new Set(xs.map((v) => Math.round(v)))].sort((a, b) => a - b);
+      const ySorted = [...new Set(ys.map((v) => Math.round(v)))].sort((a, b) => a - b);
+      const dx = [];
+      const dy = [];
+      for (let i = 1; i < xSorted.length; i += 1) {
+        const d = xSorted[i] - xSorted[i - 1];
+        if (d > 3) dx.push(d);
+      }
+      for (let i = 1; i < ySorted.length; i += 1) {
+        const d = ySorted[i] - ySorted[i - 1];
+        if (d > 3) dy.push(d);
+      }
+      const step = median([...dx, ...dy]);
+      if (step) {
+        g = {
+          minX: Math.min(...xs),
+          minY: Math.min(...ys),
+          maxX: Math.max(...xs),
+          maxY: Math.max(...ys),
+          step,
+          visibleCols: Math.max(2, Math.round((Math.max(...xs) - Math.min(...xs)) / step) + 1),
+          visibleRows: Math.max(2, Math.round((Math.max(...ys) - Math.min(...ys)) / step) + 1),
+        };
+      }
+    }
+  }
+
+  if (!g) return null;
   const cols = state.puzzleVisibleCols > 0 ? state.puzzleVisibleCols : g.visibleCols;
   const rows = state.puzzleVisibleRows > 0 ? state.puzzleVisibleRows : g.visibleRows;
   return {
