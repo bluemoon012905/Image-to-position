@@ -70,6 +70,14 @@
             <button id="extractBtn" type="button">Extract stones</button>
             <p class="hint">Grid-first recognition engine (no manual threshold tuning).</p>
           </div>
+          <div class="controls-row">
+            <label>
+              Model URL
+              <input id="modelUrlInput" type="text" value="./models/stone_classifier/model.json" />
+            </label>
+            <button id="loadModelBtn" type="button" class="ghost">Load ML model</button>
+          </div>
+          <p id="modelStatus" class="status">Model: heuristic detector active.</p>
 
           <canvas id="warpCanvas" width="620" height="620"></canvas>
           <p id="extractStatus" class="status">Set 4 corners, then extract stones.</p>
@@ -139,6 +147,7 @@
       </section>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
     <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
     <script src="./extraction-core.js"></script>
     <script src="./app.js"></script>

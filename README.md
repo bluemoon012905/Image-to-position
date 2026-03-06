@@ -35,13 +35,28 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 npm run train
+# quick GPU check:
+python3 -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
 # force CPU:
 python3 train/train_classifier.py --data-root data/processed/patches --output-dir train/artifacts --device cpu
 # force GPU:
 python3 train/train_classifier.py --data-root data/processed/patches --output-dir train/artifacts --device gpu
 ```
 
-4. Run JS tests
+4. Convert trained `.keras` model to TF.js (for browser UI)
+
+```bash
+# run this in a separate env so your training env stays clean
+python3 -m venv .venv-tfjs
+source .venv-tfjs/bin/activate
+pip install tensorflow==2.20.0 tensorflowjs==4.22.0
+tensorflowjs_converter \
+  --input_format=keras \
+  models/latest/stone_classifier_best.keras \
+  web/models/stone_classifier
+```
+
+5. Run JS tests
 
 ```bash
 npm test

@@ -21,6 +21,7 @@ const state = {
   rawStones: [],
   stones: [],
   extracting: false,
+  mlModel: null,
   showImagePreview: false,
   warpPreviewCanvas: null,
 };
@@ -41,11 +42,14 @@ const cropModeBtn = document.getElementById("cropModeBtn");
 const applyCropBtn = document.getElementById("applyCropBtn");
 const cancelCropBtn = document.getElementById("cancelCropBtn");
 const extractBtn = document.getElementById("extractBtn");
+const loadModelBtn = document.getElementById("loadModelBtn");
+const modelUrlInput = document.getElementById("modelUrlInput");
 const generateBtn = document.getElementById("generateBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 
 const cornerStatus = document.getElementById("cornerStatus");
 const extractStatus = document.getElementById("extractStatus");
+const modelStatus = document.getElementById("modelStatus");
 const sgfStatus = document.getElementById("sgfStatus");
 const sgfOutput = document.getElementById("sgfOutput");
 const gameNameInput = document.getElementById("gameName");
@@ -842,6 +846,98 @@ function percentile(values, pct) {
   return sorted[lo] * (1 - t) + sorted[hi] * t;
 }
 
+async function loadMlModelFromUrl(url) {
+  if (!window.tf || typeof window.tf.loadLayersModel !== "function") {
+    throw new Error("TensorFlow.js is not available.");
+  }
+  const model = await window.tf.loadLayersModel(url);
+  state.mlModel = model;
+  const inShape = model.inputs?.[0]?.shape?.join("x") || "?";
+  const outShape = model.outputs?.[0]?.shape?.join("x") || "?";
+  setStatus(modelStatus, `Model: loaded from ${url} (in=${inShape}, out=${outShape}).`);
+}
+
+function detectStonesWithMlModel(n, step, imgData, model) {
+  const patch = 32;
+  const half = Math.floor(patch / 2);
+  const count = n * n;
+  const data = new Float32Array(count * patch * patch);
+  const points = [];
+  const { width, height, data: rgba } = imgData;
+  let idx = 0;
+
+  for (let row = 0; row < n; row += 1) {
+    for (let col = 0; col < n; col += 1) {
+      const cx = col * step;
+      const cy = row * step;
+      points.push({ row, col, x: cx, y: cy });
+      for (let py = 0; py < patch; py += 1) {
+        for (let px = 0; px < patch; px += 1) {
+          const sx = Math.max(0, Math.min(width - 1, Math.round(cx + px - half)));
+          const sy = Math.max(0, Math.min(height - 1, Math.round(cy + py - half)));
+          const p = (sy * width + sx) * 4;
+          const r = rgba[p];
+          const g = rgba[p + 1];
+          const b = rgba[p + 2];
+          data[idx] = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+          idx += 1;
+        }
+      }
+    }
+  }
+
+  const tensor = window.tf.tensor4d(data, [count, patch, patch, 1]);
+  const pred = model.predict(tensor);
+  const probsTensor = Array.isArray(pred) ? pred[0] : pred;
+  const probs = probsTensor.arraySync();
+  tensor.dispose();
+  probsTensor.dispose();
+  if (Array.isArray(pred)) pred.forEach((t) => t.dispose && t.dispose());
+
+  const stones = [];
+  for (let i = 0; i < points.length; i += 1) {
+    const p = points[i];
+    const row = probs[i] || [];
+    if (row.length < 3) continue;
+    const [pBlack, pWhite, pEmpty] = row;
+    let color = "empty";
+    let conf = 0;
+    if (pBlack >= pWhite && pBlack >= pEmpty) {
+      color = "black";
+      conf = pBlack;
+    } else if (pWhite >= pBlack && pWhite >= pEmpty) {
+      color = "white";
+      conf = pWhite;
+    }
+    if (color === "empty" || conf < 0.55) continue;
+
+    stones.push({
+      property: color === "black" ? "AB" : "AW",
+      color,
+      imgCol: p.col,
+      imgRow: p.row,
+      imgX: p.x,
+      imgY: p.y,
+      col: p.col,
+      row: p.row,
+      coord: pointToSgfCoord(p.col, p.row, n),
+      delta: 0,
+      radius: Number(estimateStoneRadius(imgData, p.x, p.y, step, color).toFixed(2)),
+      confidence: Number(conf.toFixed(3)),
+      source: "ml-model",
+    });
+  }
+
+  return {
+    stones,
+    meta: {
+      intersections: count,
+      threshold: 0.55,
+      model: "tfjs-layers",
+    },
+  };
+}
+
 function stddev(values) {
   if (!values.length) return 0;
   const mean = values.reduce((a, b) => a + b, 0) / values.length;
@@ -1280,18 +1376,14 @@ async function extractStones() {
     const n = state.boardSize;
     const size = warpCanvas.width;
     const boardStep = (size - 1) / (n - 1);
-    const detection = detectStonesFromGrid(n, boardStep, state.warpedImageData);
+    const detection = state.mlModel
+      ? detectStonesWithMlModel(n, boardStep, state.warpedImageData, state.mlModel)
+      : detectStonesFromGrid(n, boardStep, state.warpedImageData);
     const stones = detection.stones;
     state.lastDetectionMeta = {
-      mode: "grid-photometric",
+      mode: state.mlModel ? "ml-model" : "grid-photometric",
       intersections: detection.meta.intersections,
-      thresholds: detection.meta.thresholds,
-      blackMedian: detection.meta.blackMedian,
-      whiteMedian: detection.meta.whiteMedian,
-      blackMad: detection.meta.blackMad,
-      whiteMad: detection.meta.whiteMad,
-      pBlack90: detection.meta.pBlack90,
-      pWhite90: detection.meta.pWhite90,
+      thresholds: detection.meta.thresholds || null,
     };
 
     state.manualEdits = {};
@@ -1312,10 +1404,17 @@ async function extractStones() {
 
     const blackCount = stones.filter((s) => s.color === "black").length;
     const whiteCount = stones.filter((s) => s.color === "white").length;
-    setStatus(
-      extractStatus,
-      `Grid recognition scanned ${detection.meta.intersections} intersections and found ${stones.length} stones (${blackCount} black, ${whiteCount} white). Scores: B-median=${detection.meta.blackMedian}, W-median=${detection.meta.whiteMedian}, thresholds B>=${detection.meta.thresholds.black}, W>=${detection.meta.thresholds.white}.`
-    );
+    if (state.mlModel) {
+      setStatus(
+        extractStatus,
+        `ML recognition scanned ${detection.meta.intersections} intersections and found ${stones.length} stones (${blackCount} black, ${whiteCount} white). Confidence threshold=${detection.meta.threshold}.`
+      );
+    } else {
+      setStatus(
+        extractStatus,
+        `Grid recognition scanned ${detection.meta.intersections} intersections and found ${stones.length} stones (${blackCount} black, ${whiteCount} white). Scores: B-median=${detection.meta.blackMedian}, W-median=${detection.meta.whiteMedian}, thresholds B>=${detection.meta.thresholds.black}, W>=${detection.meta.thresholds.white}.`
+      );
+    }
   } catch (err) {
     console.error("extractStones failed", err);
     setStatus(extractStatus, "Extraction failed due to an internal error. Check console and try again.");
@@ -1616,6 +1715,22 @@ cancelCropBtn.addEventListener("click", () => {
 });
 
 extractBtn.addEventListener("click", extractStones);
+if (loadModelBtn) {
+  loadModelBtn.addEventListener("click", async () => {
+    const url = (modelUrlInput?.value || "").trim();
+    if (!url) {
+      setStatus(modelStatus, "Model: enter a model.json URL first.");
+      return;
+    }
+    setStatus(modelStatus, "Model: loading...");
+    try {
+      await loadMlModelFromUrl(url);
+    } catch (err) {
+      console.error("load model failed", err);
+      setStatus(modelStatus, `Model load failed: ${err?.message || String(err)}`);
+    }
+  });
+}
 toolBlackBtn.addEventListener("click", () => setEditTool("black"));
 toolWhiteBtn.addEventListener("click", () => setEditTool("white"));
 toolEraseBtn.addEventListener("click", () => setEditTool("erase"));
