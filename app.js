@@ -842,12 +842,53 @@ function percentile(values, pct) {
   return sorted[lo] * (1 - t) + sorted[hi] * t;
 }
 
+function stddev(values) {
+  if (!values.length) return 0;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((acc, v) => acc + (v - mean) ** 2, 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+function sampleAnnulusSectorMeans(imgData, cx, cy, rInner, rOuter, sectors = 8) {
+  const { data, width, height } = imgData;
+  const sums = new Array(sectors).fill(0);
+  const counts = new Array(sectors).fill(0);
+  const minX = Math.max(0, Math.floor(cx - rOuter));
+  const maxX = Math.min(width - 1, Math.ceil(cx + rOuter));
+  const minY = Math.max(0, Math.floor(cy - rOuter));
+  const maxY = Math.min(height - 1, Math.ceil(cy + rOuter));
+
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      const dx = x - cx;
+      const dy = y - cy;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < rInner || d > rOuter) continue;
+
+      let angle = Math.atan2(dy, dx);
+      if (angle < 0) angle += Math.PI * 2;
+      const bin = Math.min(sectors - 1, Math.floor((angle / (Math.PI * 2)) * sectors));
+
+      const idx = (y * width + x) * 4;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const brightness = 0.299 * r + 0.587 * g + 0.114 * b;
+      sums[bin] += brightness;
+      counts[bin] += 1;
+    }
+  }
+
+  return sums.map((sum, i) => (counts[i] ? sum / counts[i] : 0));
+}
+
 function detectStonesFromGrid(n, step, imgData) {
   const rCore = Math.max(2, step * 0.26);
   const rRingInner = step * 0.34;
   const rRingOuter = step * 0.56;
-  const rBgInner = step * 0.66;
-  const rBgOuter = step * 0.84;
+  // Keep background band tighter to reduce bleed from stones on neighboring intersections.
+  const rBgInner = step * 0.56;
+  const rBgOuter = step * 0.69;
 
   const metrics = [];
   for (let row = 0; row < n; row += 1) {
@@ -857,25 +898,51 @@ function detectStonesFromGrid(n, step, imgData) {
       const core = sampleCircleStats(imgData, x, y, 0, rCore);
       const ring = sampleCircleStats(imgData, x, y, rRingInner, rRingOuter);
       const bg = sampleCircleStats(imgData, x, y, rBgInner, rBgOuter);
+      const ringSectorSpread = stddev(
+        sampleAnnulusSectorMeans(imgData, x, y, rRingInner, rRingOuter, 8)
+      );
+      const bgSectorSpread = stddev(sampleAnnulusSectorMeans(imgData, x, y, rBgInner, rBgOuter, 8));
       const delta = bg - core;
       const rimDip = (core + bg) / 2 - ring;
       const blackScore = delta + Math.max(0, ring - core) * 0.45;
       const whiteScore =
         -delta + Math.max(0, rimDip) * 0.95 + Math.max(0, core - ring) * 0.25;
-      metrics.push({ row, col, x, y, core, ring, bg, delta, rimDip, blackScore, whiteScore });
+      metrics.push({
+        row,
+        col,
+        x,
+        y,
+        core,
+        ring,
+        bg,
+        ringSectorSpread,
+        bgSectorSpread,
+        delta,
+        rimDip,
+        blackScore,
+        whiteScore,
+      });
     }
   }
 
   const blackScores = metrics.map((m) => m.blackScore);
   const whiteScores = metrics.map((m) => m.whiteScore);
+  const ringSpreads = metrics.map((m) => m.ringSectorSpread);
+  const bgSpreads = metrics.map((m) => m.bgSectorSpread);
   const blackMedian = median(blackScores);
   const whiteMedian = median(whiteScores);
+  const ringSpreadMedian = median(ringSpreads);
+  const bgSpreadMedian = median(bgSpreads);
   const blackMad = median(blackScores.map((v) => Math.abs(v - blackMedian))) * 1.4826;
   const whiteMad = median(whiteScores.map((v) => Math.abs(v - whiteMedian))) * 1.4826;
+  const ringSpreadMad = median(ringSpreads.map((v) => Math.abs(v - ringSpreadMedian))) * 1.4826;
+  const bgSpreadMad = median(bgSpreads.map((v) => Math.abs(v - bgSpreadMedian))) * 1.4826;
 
   function classifyWithScale(scale = 1) {
     const blackThreshold = blackMedian + Math.max(8, blackMad * (1.85 * scale));
     const whiteThreshold = whiteMedian + Math.max(8, whiteMad * (1.8 * scale));
+    const ringSpreadMax = ringSpreadMedian + Math.max(9, ringSpreadMad * 4.0);
+    const bgSpreadMax = bgSpreadMedian + Math.max(10, bgSpreadMad * 4.2);
     const out = [];
 
     for (const m of metrics) {
@@ -887,7 +954,9 @@ function detectStonesFromGrid(n, step, imgData) {
         m.whiteScore >= whiteThreshold &&
         m.core >= m.ring + 1.2 &&
         m.ring <= m.bg - 1.3 &&
-        m.core >= 72;
+        m.core >= 72 &&
+        m.ringSectorSpread <= ringSpreadMax &&
+        m.bgSectorSpread <= bgSpreadMax;
       if (!blackPass && !whitePass) continue;
 
       let color = "black";
@@ -929,6 +998,8 @@ function detectStonesFromGrid(n, step, imgData) {
       thresholds: {
         black: Number(blackThreshold.toFixed(2)),
         white: Number(whiteThreshold.toFixed(2)),
+        ringSpreadMax: Number(ringSpreadMax.toFixed(2)),
+        bgSpreadMax: Number(bgSpreadMax.toFixed(2)),
       },
     };
   }
@@ -947,6 +1018,10 @@ function detectStonesFromGrid(n, step, imgData) {
       whiteMedian: Number(whiteMedian.toFixed(2)),
       blackMad: Number(blackMad.toFixed(2)),
       whiteMad: Number(whiteMad.toFixed(2)),
+      ringSpreadMedian: Number(ringSpreadMedian.toFixed(2)),
+      bgSpreadMedian: Number(bgSpreadMedian.toFixed(2)),
+      ringSpreadMad: Number(ringSpreadMad.toFixed(2)),
+      bgSpreadMad: Number(bgSpreadMad.toFixed(2)),
       pBlack90: Number(percentile(blackScores, 90).toFixed(2)),
       pWhite90: Number(percentile(whiteScores, 90).toFixed(2)),
       thresholds: result.thresholds,
