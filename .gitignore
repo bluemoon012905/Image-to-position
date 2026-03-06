@@ -13,3 +13,4 @@ data/processed/
 
 # Misc
 .DS_Store
+.venv-tfjs/

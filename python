@@ -1,0 +1,8 @@
+python3 - <<'PY'
+import tensorflow as tf
+m = tf.keras.models.load_model("models/latest/stone_classifier_best.keras")
+m.save("models/latest/stone_classifier_best.h5")
+print("saved models/latest/stone_classifier_best.h5")
+PY
+
+codex resume 019cc10c-4812-7de0-937c-56eb141c7170
