@@ -2,6 +2,9 @@
   "name": "image-to-position",
   "private": true,
   "scripts": {
-    "test": "node --test"
+    "web": "python3 -m http.server 8080 -d web",
+    "test": "node --test tests/*.test.js",
+    "build:dataset": "python3 scripts/build_dataset.py --input-root data/examples/references --out-root data/processed/patches",
+    "train": "python3 train/train_classifier.py --data-root data/processed/patches --output-dir train/artifacts"
   }
 }

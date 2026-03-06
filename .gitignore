@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Training artifacts
+train/artifacts/
+*.keras
+*.h5
+
+# Generated datasets (keep examples)
+data/processed/
+
+# Misc
+.DS_Store

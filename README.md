@@ -1,43 +1,87 @@
-# Image to SGF
+# Image-to-Position (ML Scaffold)
 
-Static browser tool to convert a Go board photo into an SGF setup position.
+This repo is now organized for a lightweight, local-first ML workflow for Go stone recognition.
 
-## Workflow (3 steps)
+## Directory Layout
 
-1. Upload board image and detect/select the 4 board corners.
-2. Convert board intersections to coordinate properties (`AB` / `AW`).
-3. Generate and download SGF.
+- `web/`: browser app (upload, cornering, extraction UI, SGF edit/export)
+- `data/examples/references/`: your current labeled examples (image + SGF)
+- `data/raw/`: place new labeled cases here (or anywhere and point the script)
+- `data/processed/`: generated patch dataset (ignored by git)
+- `scripts/`: dataset prep utilities
+- `train/`: model training code and artifacts
+- `tests/`: JS unit tests
+- `docs/legacy/`: old notes kept for reference
 
-## Run locally
+## Quick Start
 
-Because browsers often block local file APIs on `file://`, run a small static server:
+1. Run web app
 
 ```bash
-python3 -m http.server 8080
+npm run web
+# open http://localhost:8080
 ```
 
-Open: `http://localhost:8080`
+2. Build patch dataset from labeled cases
 
-## Run tests
+```bash
+npm run build:dataset
+```
+
+3. Train tiny classifier
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+npm run train
+# force CPU:
+python3 train/train_classifier.py --data-root data/processed/patches --output-dir train/artifacts --device cpu
+# force GPU:
+python3 train/train_classifier.py --data-root data/processed/patches --output-dir train/artifacts --device gpu
+```
+
+4. Run JS tests
 
 ```bash
 npm test
 ```
 
-## Deploy to GitHub Pages
+## Labeled Data Format
 
-1. Push these files to your repository (`index.html`, `style.css`, `app.js`).
-2. In GitHub repo settings, enable Pages from your default branch root.
-3. Your app will be available at the Pages URL.
+Each case directory should contain:
+- one board image (`.png/.jpg/.jpeg/.webp`)
+- one SGF file with `AB`/`AW` setup stones
 
-## Notes
+Example:
 
-- Corner auto-detect and stone-circle detection use OpenCV.js in the browser.
-- You can import with file upload or by pasting an image into the paste box.
-- You can crop after upload/paste using `Crop mode` -> drag box -> `Apply crop`.
-- Step 3 includes a visual SGF preview board before download.
-- Step 3 lets you click the preview to add/remove stones and use a D-pad to nudge position in any direction; center is a 90-degree rotate button.
-- Current detection flow is tuned for full-board images (4-corner perspective warp).
-- Deferred ideas are tracked in `FUTURE_NOTES.md`.
-- If auto-detect misses, click corners manually in order:
-  top-left, top-right, bottom-right, bottom-left.
+```
+data/raw/case_001/
+  board.png
+  position.sgf
+```
+
+## How Much Data Is Needed?
+
+For a small static in-browser model (per-intersection classifier):
+
+- Minimum to start: `~50` full-board labeled positions (19x19)  
+  about `18,000` patches total (`361` points each)
+- Good early target: `150-300` boards  
+  gives much better white-stone robustness across lighting/cameras
+- Strong target: `500+` boards  
+  good generalization and fewer hand-tuned heuristics
+
+Class balance matters more than raw total. Make sure your set includes:
+- sparse + dense positions
+- bright/dim lighting
+- glare/shadows
+- multiple devices/cameras
+- plenty of white stones near black stones (your current failure mode)
+
+## Next Integration Step
+
+After you provide more labeled data, we can:
+1. train a tiny CNN (`black/white/empty`) offline,
+2. export to TF.js,
+3. run inference directly in `web/` with no backend.
