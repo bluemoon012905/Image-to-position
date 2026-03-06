@@ -1489,23 +1489,12 @@ async function extractStones() {
     const boardStep = (size - 1) / (n - 1);
     const circleCandidates = detectCircleCandidates(boardStep);
     const points = circlesToIntersections(circleCandidates, n, boardStep);
+    const hasOnGridHits = points.length > 0;
     const samplingStep = boardStep;
-
-    if (!points.length) {
-      state.manualEdits = {};
-      state.rawStones = [];
-      state.stones = [];
-      state.mappingContext = null;
-      renderWarpAndStoneMarkers([], boardStep);
-      renderStoneTable([]);
-      drawSgfPreview([], n);
-      setStatus(extractStatus, "No circles detected on intersections. Try crop, corner box, or different image.");
-      return;
-    }
 
     let blackThreshold = Math.max(1, Number(blackThresholdInput.value) || DEFAULT_BLACK_THRESHOLD);
     let whiteThreshold = Math.max(1, Number(whiteThresholdInput.value) || DEFAULT_WHITE_THRESHOLD);
-    const autoBalance = Boolean(autoBalanceCheckbox?.checked);
+    const autoBalance = Boolean(autoBalanceCheckbox?.checked) && hasOnGridHits;
     const rCenter = Math.max(2, samplingStep * 0.34);
     const rRingInner = samplingStep * 0.48;
     const rRingOuter = samplingStep * 0.72;
@@ -1626,9 +1615,12 @@ async function extractStones() {
       confidenceRebalanceMeta && confidenceRebalanceMeta.removed > 0
         ? ` Confidence rebalance removed ${confidenceRebalanceMeta.removed} low-confidence ${confidenceRebalanceMeta.dominant} stones (imbalance ${Math.round(confidenceRebalanceMeta.initialImbalance * 100)}% -> ${Math.round(confidenceRebalanceMeta.finalImbalance * 100)}%).`
         : "";
+    const noCircleNote = hasOnGridHits
+      ? ""
+      : " No circles landed on intersections; using white-rescue fallback only.";
     setStatus(
       extractStatus,
-      `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Thresholds: B=${blackThreshold}, W=${whiteThreshold}.${autoBalanceNote}${whiteRescueText}${confidenceRebalanceText}`
+      `${detectText}Circle scan found ${circleCandidates.length} circle candidates, ${points.length} on-grid hits, ${stones.length} classified stones (${blackCount} black, ${whiteCount} white). Thresholds: B=${blackThreshold}, W=${whiteThreshold}.${autoBalanceNote}${whiteRescueText}${confidenceRebalanceText}${noCircleNote}`
     );
   } catch (err) {
     console.error("extractStones failed", err);
