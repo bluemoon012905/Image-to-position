@@ -6,3 +6,5 @@ print("saved models/latest/stone_classifier_best.h5")
 PY
 
 codex resume 019cc10c-4812-7de0-937c-56eb141c7170
+
+note: the edges needs better handling'[]
