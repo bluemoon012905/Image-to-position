@@ -18,6 +18,12 @@ python3 -m http.server 8080
 
 Open: `http://localhost:8080`
 
+## Run tests
+
+```bash
+npm test
+```
+
 ## Deploy to GitHub Pages
 
 1. Push these files to your repository (`index.html`, `style.css`, `app.js`).

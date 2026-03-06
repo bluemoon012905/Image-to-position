@@ -852,16 +852,18 @@ function pointToSgfCoord(i, j, n) {
 }
 
 function classifyStone(delta, blackThreshold, whiteThreshold) {
-  if (delta > blackThreshold) {
-    return { color: "black", property: "AB" };
+  if (globalThis.ExtractionCore?.classifyStone) {
+    return globalThis.ExtractionCore.classifyStone(delta, blackThreshold, whiteThreshold);
   }
-  if (-delta > whiteThreshold) {
-    return { color: "white", property: "AW" };
-  }
+  if (delta > blackThreshold) return { color: "black", property: "AB" };
+  if (-delta > whiteThreshold) return { color: "white", property: "AW" };
   return { color: "empty", property: "" };
 }
 
 function confidenceFromDelta(delta, color, blackThreshold, whiteThreshold) {
+  if (globalThis.ExtractionCore?.confidenceFromDelta) {
+    return globalThis.ExtractionCore.confidenceFromDelta(delta, color, blackThreshold, whiteThreshold);
+  }
   if (color === "black") {
     const margin = delta - blackThreshold;
     const scale = Math.max(6, blackThreshold * 0.55);
@@ -876,6 +878,9 @@ function confidenceFromDelta(delta, color, blackThreshold, whiteThreshold) {
 }
 
 function rebalanceByConfidence(stones, minTotal = 31, imbalanceThreshold = 0.2) {
+  if (globalThis.ExtractionCore?.rebalanceByConfidence) {
+    return globalThis.ExtractionCore.rebalanceByConfidence(stones, minTotal, imbalanceThreshold);
+  }
   if (!stones || stones.length < minTotal) {
     return { stones, removed: 0, dominant: "", initialImbalance: 0, finalImbalance: 0 };
   }
@@ -928,6 +933,13 @@ function rebalanceByConfidence(stones, minTotal = 31, imbalanceThreshold = 0.2) 
     initialImbalance,
     finalImbalance: calcImbalance(working),
   };
+}
+
+function mergeWhiteRescueStones(baseStones, rescueStones) {
+  if (globalThis.ExtractionCore?.mergeWhiteRescueStones) {
+    return globalThis.ExtractionCore.mergeWhiteRescueStones(baseStones, rescueStones);
+  }
+  return Array.isArray(baseStones) ? [...baseStones] : [];
 }
 
 function collectWhiteRescueStones(n, step, occupiedKeySet, whiteThreshold) {
@@ -1575,11 +1587,7 @@ async function extractStones() {
     const whiteRescue = collectWhiteRescueStones(n, boardStep, occupied, whiteThreshold);
     whiteRescueMeta = whiteRescue.meta;
     if (whiteRescue.stones.length) {
-      const byPoint = new Map(stones.map((s) => [`${s.imgRow},${s.imgCol}`, s]));
-      for (const extra of whiteRescue.stones) {
-        byPoint.set(`${extra.imgRow},${extra.imgCol}`, extra);
-      }
-      stones = [...byPoint.values()];
+      stones = mergeWhiteRescueStones(stones, whiteRescue.stones);
     }
 
     if (autoBalance && stones.length > 30) {

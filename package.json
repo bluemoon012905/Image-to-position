@@ -1,0 +1,7 @@
+{
+  "name": "image-to-position",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}
