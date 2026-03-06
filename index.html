@@ -68,29 +68,7 @@
 
           <div class="controls-row">
             <button id="extractBtn" type="button">Extract stones</button>
-            <label>
-              <input id="autoBalanceCheckbox" type="checkbox" checked />
-              Auto balance
-              <span id="autoBalanceSpinner" class="spinner hidden" aria-hidden="true"></span>
-            </label>
-          </div>
-
-          <div class="controls-row">
-            <label>
-              Black threshold
-              <input id="blackThresholdInput" type="number" min="1" max="80" step="1" value="26" />
-            </label>
-            <label>
-              White threshold
-              <input id="whiteThresholdInput" type="number" min="1" max="80" step="1" value="22" />
-            </label>
-            <label>
-              Detection mode
-              <select id="detectionModeSelect">
-                <option value="preprocessed" selected>Preprocessed</option>
-                <option value="raw">Raw grayscale</option>
-              </select>
-            </label>
+            <p class="hint">Grid-first recognition engine (no manual threshold tuning).</p>
           </div>
 
           <canvas id="warpCanvas" width="620" height="620"></canvas>
