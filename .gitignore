@@ -1,0 +1,6 @@
+# Local Python/Node environments
+.venv/
+.venv-tfjs/
+
+# Archived AI image-recognition assets and scripts
+archived/ai-image-rec/
