@@ -8,8 +8,8 @@ train/artifacts/
 *.keras
 *.h5
 
-# Generated datasets (keep examples)
-data/processed/
+# Datasets / training corpora
+data/
 
 # Misc
 .DS_Store
