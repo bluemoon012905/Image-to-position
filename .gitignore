@@ -1,2 +1,7 @@
 .venv/
 .venv-tfjs/
+archived/ai-image-rec/data/
+archived/ai-image-rec/models/
+archived/ai-image-rec/train/artifacts/
+archived/ai-image-rec/scripts/__pycache__/
+archived/ai-image-rec/train/__pycache__/

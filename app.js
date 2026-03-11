@@ -65,8 +65,21 @@ const rotateBtn = document.getElementById("rotateBtn");
 const shiftValue = document.getElementById("shiftValue");
 
 const LETTERS = "abcdefghijklmnopqrstuvwxyz";
+const GO_PREVIEW_COLUMNS = "ABCDEFGHJKLMNOPQRST";
 const DEFAULT_BLACK_THRESHOLD = 26;
 const DEFAULT_WHITE_THRESHOLD = 22;
+
+function getPreviewMetrics() {
+  const width = sgfPreviewCanvas.width;
+  const height = sgfPreviewCanvas.height;
+  const size = Math.min(width, height);
+  const margin = Math.round(size * 0.12);
+  const boardArea = size - margin * 2;
+  const step = boardArea / (state.boardSize - 1);
+  const offsetX = (width - size) / 2;
+  const offsetY = (height - size) / 2;
+  return { width, height, size, margin, boardArea, step, offsetX, offsetY };
+}
 
 function setStatus(el, message) {
   el.textContent = message;
@@ -108,6 +121,34 @@ function median(values) {
   return sorted[mid];
 }
 
+function getPixelBrightness(imgData, x, y) {
+  const px = Math.max(0, Math.min(imgData.width - 1, Math.round(x)));
+  const py = Math.max(0, Math.min(imgData.height - 1, Math.round(y)));
+  const idx = (py * imgData.width + px) * 4;
+  const r = imgData.data[idx];
+  const g = imgData.data[idx + 1];
+  const b = imgData.data[idx + 2];
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+function sampleLineBrightness(imgData, cx, cy, dx, dy, start, end, samples = 12) {
+  let sum = 0;
+  let count = 0;
+  for (let i = 0; i < samples; i += 1) {
+    const t = samples === 1 ? 0.5 : i / (samples - 1);
+    const dist = start + (end - start) * t;
+    sum += getPixelBrightness(imgData, cx + dx * dist, cy + dy * dist);
+    count += 1;
+  }
+  return count ? sum / count : 0;
+}
+
+function sampleCrossBrightness(imgData, cx, cy, start, end, samples = 12) {
+  const horizontal = sampleLineBrightness(imgData, cx, cy, 1, 0, start, end, samples);
+  const vertical = sampleLineBrightness(imgData, cx, cy, 0, 1, start, end, samples);
+  return (horizontal + vertical) / 2;
+}
+
 function applyManualEdits(stones, n) {
   const map = new Map();
   for (const stone of stones) {
@@ -129,12 +170,7 @@ function getPreviewBoardPoint(event) {
   const rect = sgfPreviewCanvas.getBoundingClientRect();
   const px = ((event.clientX - rect.left) * sgfPreviewCanvas.width) / rect.width;
   const py = ((event.clientY - rect.top) * sgfPreviewCanvas.height) / rect.height;
-  const size = Math.min(sgfPreviewCanvas.width, sgfPreviewCanvas.height);
-  const margin = Math.round(size * 0.08);
-  const boardArea = size - margin * 2;
-  const step = boardArea / (n - 1);
-  const offsetX = (sgfPreviewCanvas.width - size) / 2;
-  const offsetY = (sgfPreviewCanvas.height - size) / 2;
+  const { margin, step, offsetX, offsetY } = getPreviewMetrics();
 
   const lx = px - offsetX;
   const ly = py - offsetY;
@@ -227,7 +263,7 @@ function drawSgfPreview(stones = state.stones, n = state.boardSize) {
   const canvas = sgfPreviewCanvas;
   const vp = prepareHiDPICanvas(canvas, ctx);
   const size = Math.min(vp.width, vp.height);
-  const margin = Math.round(size * 0.08);
+  const margin = Math.round(size * 0.12);
   const boardArea = size - margin * 2;
   const step = boardArea / (n - 1);
 
@@ -236,6 +272,18 @@ function drawSgfPreview(stones = state.stones, n = state.boardSize) {
 
   ctx.save();
   ctx.translate((vp.width - size) / 2, (vp.height - size) / 2);
+
+  const columnLabels = GO_PREVIEW_COLUMNS.slice(0, n).split("");
+  ctx.fillStyle = "rgba(40, 27, 16, 0.82)";
+  ctx.font = `${Math.max(11, Math.round(step * 0.42))}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (let i = 0; i < n; i += 1) {
+    const pos = margin + i * step;
+    ctx.fillText(columnLabels[i] || String(i + 1), pos, margin * 0.68);
+    const rowLabel = String(n - i);
+    ctx.fillText(rowLabel, margin * 0.68, pos);
+  }
 
   ctx.strokeStyle = "rgba(26, 20, 14, 0.75)";
   ctx.lineWidth = 1;
@@ -738,6 +786,36 @@ function estimateStoneRadius(imgData, cx, cy, step, color) {
   return Number(Math.sqrt(count / Math.PI).toFixed(2));
 }
 
+function validateWhiteStoneCandidate(imgData, point, step, radius, centerMean, ringMean) {
+  const targetRadius = Math.max(3, radius || step * 0.42);
+  const edgeInner = Math.max(targetRadius * 0.72, step * 0.26);
+  const edgeOuter = Math.min(step * 0.74, targetRadius * 1.08);
+  const edgeMean = sampleCircleStats(imgData, point.x, point.y, edgeInner, edgeOuter);
+
+  const innerCrossMean = sampleCrossBrightness(
+    imgData,
+    point.x,
+    point.y,
+    -targetRadius * 0.28,
+    targetRadius * 0.28,
+    11
+  );
+  const outerCrossMean =
+    (sampleCrossBrightness(imgData, point.x, point.y, targetRadius * 0.86, targetRadius * 1.2, 6) +
+      sampleCrossBrightness(imgData, point.x, point.y, -targetRadius * 1.2, -targetRadius * 0.86, 6)) /
+    2;
+
+  const outlinePresent = centerMean - edgeMean > Math.max(7, Math.abs(ringMean - centerMean) * 0.24);
+  const gridMissing = innerCrossMean - outerCrossMean > 8;
+
+  return {
+    valid: outlinePresent || gridMissing,
+    edgeMean: Number(edgeMean.toFixed(2)),
+    innerCrossMean: Number(innerCrossMean.toFixed(2)),
+    outerCrossMean: Number(outerCrossMean.toFixed(2)),
+  };
+}
+
 function detectCircleCandidatesFromGray(grayMat, step, roi = null) {
   const detectRoi = roi
     ? new cv.Rect(
@@ -1106,17 +1184,34 @@ async function extractStones() {
   const rRingOuter = samplingStep * 0.72;
 
   function classifyPointsWithThresholds(blackT, whiteT) {
-    const out = [];
+    const blackStones = [];
+    const whiteCandidates = [];
     for (const point of points) {
       const centerMean = sampleCircleStats(state.warpedImageData, point.x, point.y, 0, rCenter);
       const ringMean = sampleCircleStats(state.warpedImageData, point.x, point.y, rRingInner, rRingOuter);
       const delta = Number((ringMean - centerMean).toFixed(2));
       const result = classifyStone(delta, blackT, whiteT);
       if (result.color === "empty") continue;
-      const radius =
-        point.r || estimateStoneRadius(state.warpedImageData, point.x, point.y, samplingStep, result.color);
+      if (result.color === "black") {
+        const radius =
+          point.r || estimateStoneRadius(state.warpedImageData, point.x, point.y, samplingStep, "black");
+        blackStones.push({
+          property: result.property,
+          color: result.color,
+          imgCol: point.col,
+          imgRow: point.row,
+          imgX: point.x,
+          imgY: point.y,
+          col: point.col,
+          row: point.row,
+          coord: pointToSgfCoord(point.col, point.row, n),
+          delta,
+          radius: Number(radius.toFixed(2)),
+        });
+        continue;
+      }
 
-      out.push({
+      whiteCandidates.push({
         property: result.property,
         color: result.color,
         imgCol: point.col,
@@ -1127,10 +1222,42 @@ async function extractStones() {
         row: point.row,
         coord: pointToSgfCoord(point.col, point.row, n),
         delta,
-        radius: Number(radius.toFixed(2)),
+        centerMean: Number(centerMean.toFixed(2)),
+        ringMean: Number(ringMean.toFixed(2)),
       });
     }
-    return out;
+
+    const blackRadiusValues = blackStones.map((s) => s.radius).filter((r) => Number.isFinite(r) && r > 0);
+    const blackRadiusRef = Number((median(blackRadiusValues) || samplingStep * 0.42).toFixed(2));
+    const whiteStones = [];
+
+    for (const candidate of whiteCandidates) {
+      const whiteCheck = validateWhiteStoneCandidate(
+        state.warpedImageData,
+        { x: candidate.imgX, y: candidate.imgY },
+        samplingStep,
+        blackRadiusRef,
+        candidate.centerMean,
+        candidate.ringMean
+      );
+      if (!whiteCheck.valid) continue;
+
+      whiteStones.push({
+        property: candidate.property,
+        color: candidate.color,
+        imgCol: candidate.imgCol,
+        imgRow: candidate.imgRow,
+        imgX: candidate.imgX,
+        imgY: candidate.imgY,
+        col: candidate.col,
+        row: candidate.row,
+        coord: candidate.coord,
+        delta: candidate.delta,
+        radius: blackRadiusRef,
+      });
+    }
+
+    return [...blackStones, ...whiteStones];
   }
 
   let stones = [];
@@ -1570,4 +1697,4 @@ updateShiftLabel();
 updateEditToolUI();
 blackThresholdInput.value = String(DEFAULT_BLACK_THRESHOLD);
 whiteThresholdInput.value = String(DEFAULT_WHITE_THRESHOLD);
-autoBalanceCheckbox.checked = false;
+autoBalanceCheckbox.checked = true;
