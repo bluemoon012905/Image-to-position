@@ -13,7 +13,7 @@ Static browser tool to convert a Go board photo into an SGF setup position.
 Because browsers often block local file APIs on `file://`, run a small static server:
 
 ```bash
-python3 -m http.server 8080
+python3 -m http.server 8080 
 ```
 
 Open: `http://localhost:8080`
