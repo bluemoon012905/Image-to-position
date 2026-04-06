@@ -21,7 +21,7 @@
 
       <section class="steps" aria-label="Workflow steps">
         <article class="step-card" id="step1-card">
-          <h2>1. Image Upload & Recognition</h2>
+          <h2>1. Image Processing</h2>
 
           <div class="controls-row">
             <label class="file-input-label">
@@ -32,9 +32,10 @@
             <label>
               Board size
               <select id="boardSizeSelect">
+                <option value="auto" selected>Auto</option>
                 <option value="9">9x9</option>
                 <option value="13">13x13</option>
-                <option value="19" selected>19x19</option>
+                <option value="19">19x19</option>
               </select>
             </label>
           </div>
@@ -50,21 +51,34 @@
           </div>
 
           <div class="controls-row">
-            <button id="autoCornersBtn" type="button">Auto detect corners</button>
-            <button id="resetCornersBtn" type="button" class="ghost">Reset corners</button>
+            <button id="autoCornersBtn" type="button">Re-detect board</button>
+            <button id="replayDetectionBtn" type="button" class="ghost">Replay scan</button>
+            <button id="resetCornersBtn" type="button" class="ghost">Reset board</button>
             <button id="cropModeBtn" type="button" class="ghost">Crop mode</button>
             <button id="applyCropBtn" type="button" class="ghost">Apply crop</button>
             <button id="cancelCropBtn" type="button" class="ghost">Cancel crop</button>
           </div>
 
-          <p class="hint">Use full-board images. Click corners in order TL, TR, BR, BL if auto-detect misses.</p>
+          <p class="hint">On upload, the app auto-detects the board border, warps the board, infers 9x9/13x13/19x19, and prepares separate grid and stone layers. If needed, click corners in order TL, TR, BR, BL to correct it manually or override board size.</p>
 
           <canvas id="sourceCanvas" width="900" height="620"></canvas>
+
+          <div class="layer-studio">
+            <div class="layer-pane">
+              <p class="pane-title">Grid layer</p>
+              <canvas id="gridLayerCanvas" width="420" height="420"></canvas>
+            </div>
+            <div class="layer-pane">
+              <p class="pane-title">Stone layer</p>
+              <canvas id="stoneLayerCanvas" width="420" height="420"></canvas>
+            </div>
+          </div>
+          <p id="detectionDebugStatus" class="status">Grid scan replay appears here after auto-detect.</p>
           <p id="cornerStatus" class="status">Waiting for image upload.</p>
         </article>
 
         <article class="step-card" id="step2-card">
-          <h2>2. Coordinates & Properties</h2>
+          <h2>2. Stone Detection</h2>
 
           <div class="controls-row">
             <button id="extractBtn" type="button">Extract stones</button>
@@ -94,7 +108,7 @@
           </div>
 
           <canvas id="warpCanvas" width="620" height="620"></canvas>
-          <p id="extractStatus" class="status">Set 4 corners, then extract stones.</p>
+          <p id="extractStatus" class="status">Load an image to run image processing, then extract stones.</p>
         </article>
 
         <article class="step-card" id="step3-card">

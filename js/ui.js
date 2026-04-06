@@ -106,6 +106,13 @@ function clearCanvas(ctx, canvas) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
+function createOffscreenCanvas(width, height) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
 function nextFrame() {
   return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 }
@@ -173,6 +180,71 @@ function normalizeRect(rect) {
 
 function updateCropModeUI() {
   cropModeBtn.classList.toggle("toggle-active", state.cropMode);
+}
+
+function drawLayerPlaceholder(canvas, ctx, title) {
+  const vp = prepareHiDPICanvas(canvas, ctx);
+  ctx.clearRect(0, 0, vp.width, vp.height);
+
+  const bg = ctx.createLinearGradient(0, 0, vp.width, vp.height);
+  bg.addColorStop(0, "rgba(245, 239, 228, 0.96)");
+  bg.addColorStop(1, "rgba(235, 229, 220, 0.98)");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, vp.width, vp.height);
+
+  ctx.strokeStyle = "rgba(31, 95, 74, 0.18)";
+  ctx.setLineDash([8, 10]);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(18, 18, vp.width - 36, vp.height - 36);
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = "rgba(37, 70, 58, 0.82)";
+  ctx.font = "600 15px 'IBM Plex Mono', monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(title, vp.width / 2, vp.height / 2 - 6);
+  ctx.fillStyle = "rgba(76, 79, 79, 0.92)";
+  ctx.font = "13px 'IBM Plex Mono', monospace";
+  ctx.fillText("Waiting for image processing", vp.width / 2, vp.height / 2 + 18);
+}
+
+function drawLayerPreview(targetCanvas, targetCtx, sourceCanvas, title, options = {}) {
+  if (!sourceCanvas) {
+    drawLayerPlaceholder(targetCanvas, targetCtx, title);
+    return;
+  }
+
+  const vp = prepareHiDPICanvas(targetCanvas, targetCtx);
+  targetCtx.clearRect(0, 0, vp.width, vp.height);
+  targetCtx.fillStyle = options.background || "rgba(239, 232, 218, 0.95)";
+  targetCtx.fillRect(0, 0, vp.width, vp.height);
+
+  const inset = 14;
+  const drawW = vp.width - inset * 2;
+  const drawH = vp.height - inset * 2;
+  const scale = Math.min(drawW / sourceCanvas.width, drawH / sourceCanvas.height);
+  const width = sourceCanvas.width * scale;
+  const height = sourceCanvas.height * scale;
+  const x = (vp.width - width) / 2;
+  const y = (vp.height - height) / 2;
+
+  targetCtx.drawImage(sourceCanvas, x, y, width, height);
+}
+
+function updateImageProcessingPreviews() {
+  drawLayerPreview(
+    gridLayerCanvas,
+    gridLayerCtx,
+    state.gridLayerCanvas,
+    "Grid layer",
+    { background: "rgba(229, 241, 235, 0.95)" }
+  );
+  drawLayerPreview(
+    stoneLayerCanvas,
+    stoneLayerCtx,
+    state.stoneLayerCanvas,
+    "Stone layer",
+    { background: "rgba(245, 239, 228, 0.95)" }
+  );
 }
 
 function drawSgfPreview(stones = state.stones, n = state.boardSize) {
@@ -319,6 +391,7 @@ function drawSourceImage() {
 
   drawCornerOverlay();
   drawCropOverlay();
+  drawDetectionDebugOverlay();
 }
 
 function drawCornerOverlay() {
@@ -365,6 +438,123 @@ function drawCropOverlay() {
   sourceCtx.fillRect(rect.x, rect.y, rect.width, rect.height);
   sourceCtx.strokeRect(rect.x, rect.y, rect.width, rect.height);
   sourceCtx.restore();
+}
+
+function drawDebugLineSegment(segment, color, lineWidth = 2, dash = []) {
+  const p1 = originalToCanvas({ x: segment.x1, y: segment.y1 });
+  const p2 = originalToCanvas({ x: segment.x2, y: segment.y2 });
+  sourceCtx.save();
+  sourceCtx.strokeStyle = color;
+  sourceCtx.lineWidth = lineWidth;
+  sourceCtx.setLineDash(dash);
+  sourceCtx.beginPath();
+  sourceCtx.moveTo(p1.x, p1.y);
+  sourceCtx.lineTo(p2.x, p2.y);
+  sourceCtx.stroke();
+  sourceCtx.restore();
+}
+
+function drawDebugInfiniteLine(line, axis, color, lineWidth = 2, dash = [8, 6]) {
+  if (!state.image) return;
+  let p1;
+  let p2;
+  if (axis === "vertical") {
+    p1 = { x: line.slope * 0 + line.intercept, y: 0 };
+    p2 = { x: line.slope * (state.image.height - 1) + line.intercept, y: state.image.height - 1 };
+  } else {
+    p1 = { x: 0, y: line.slope * 0 + line.intercept };
+    p2 = { x: state.image.width - 1, y: line.slope * (state.image.width - 1) + line.intercept };
+  }
+  drawDebugLineSegment(
+    { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y },
+    color,
+    lineWidth,
+    dash
+  );
+}
+
+function drawDebugQuad(points, color, lineWidth = 2.5) {
+  if (!points || points.length !== 4) return;
+  const canvasPoints = points.map(originalToCanvas);
+  sourceCtx.save();
+  sourceCtx.strokeStyle = color;
+  sourceCtx.lineWidth = lineWidth;
+  sourceCtx.fillStyle = color;
+  sourceCtx.beginPath();
+  sourceCtx.moveTo(canvasPoints[0].x, canvasPoints[0].y);
+  for (let i = 1; i < canvasPoints.length; i += 1) {
+    sourceCtx.lineTo(canvasPoints[i].x, canvasPoints[i].y);
+  }
+  sourceCtx.closePath();
+  sourceCtx.stroke();
+  for (const point of canvasPoints) {
+    sourceCtx.beginPath();
+    sourceCtx.arc(point.x, point.y, 4.5, 0, Math.PI * 2);
+    sourceCtx.fill();
+  }
+  sourceCtx.restore();
+}
+
+function drawDetectionDebugOverlay() {
+  if (!state.drawMeta || !state.detectionDebug || state.detectionDebugFrameIndex < 0) return;
+  const frame = state.detectionDebug.frames?.[state.detectionDebugFrameIndex];
+  if (!frame) return;
+
+  sourceCtx.save();
+  sourceCtx.fillStyle = "rgba(15, 26, 22, 0.72)";
+  sourceCtx.fillRect(18, 18, Math.min(sourceCanvas.width - 36, 460), 34);
+  sourceCtx.fillStyle = "rgba(255,255,255,0.96)";
+  sourceCtx.font = "12px 'IBM Plex Mono', monospace";
+  sourceCtx.fillText(frame.label || "Detection debug", 30, 40);
+  sourceCtx.restore();
+
+  for (const segment of frame.segments || []) {
+    drawDebugLineSegment(segment, segment.color, segment.width || 2, segment.dash || []);
+  }
+
+  for (const line of frame.lines || []) {
+    drawDebugInfiniteLine(line, line.axis, line.color, line.width || 2, line.dash || [8, 6]);
+  }
+
+  for (const quad of frame.quads || []) {
+    drawDebugQuad(quad.points, quad.color, quad.width || 2.5);
+  }
+}
+
+function stopDetectionReplay() {
+  if (state.detectionDebugTimer) {
+    clearTimeout(state.detectionDebugTimer);
+    state.detectionDebugTimer = null;
+  }
+}
+
+function playDetectionReplay() {
+  stopDetectionReplay();
+  const frames = state.detectionDebug?.frames || [];
+  if (!frames.length) {
+    if (detectionDebugStatus) {
+      detectionDebugStatus.textContent = "No grid scan replay is available yet.";
+    }
+    drawSourceImage();
+    return;
+  }
+
+  const step = () => {
+    const frame = frames[state.detectionDebugFrameIndex];
+    if (detectionDebugStatus && frame) {
+      detectionDebugStatus.textContent = frame.label;
+    }
+    drawSourceImage();
+    if (state.detectionDebugFrameIndex >= frames.length - 1) {
+      state.detectionDebugTimer = null;
+      return;
+    }
+    state.detectionDebugFrameIndex += 1;
+    state.detectionDebugTimer = setTimeout(step, frame?.duration || 380);
+  };
+
+  state.detectionDebugFrameIndex = 0;
+  step();
 }
 
 function isPointInsideImage(x, y) {
@@ -529,4 +719,3 @@ function originalToCanvas(point) {
     y: point.y * m.scale + m.offsetY,
   };
 }
-

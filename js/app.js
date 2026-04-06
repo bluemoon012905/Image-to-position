@@ -72,7 +72,7 @@ function applyCropToImage() {
     drawSourceImage();
     state.cropMode = false;
     updateCropModeUI();
-    setStatus(cornerStatus, "Crop applied. Select corners or run auto-detect.");
+    processImageForBoard({ forceRedetect: true, sourceLabel: "Cropped" });
   };
   img.src = temp.toDataURL("image/png");
 }
@@ -94,12 +94,21 @@ function resetStateForNewImage() {
   state.stones = [];
   state.warpedImageData = null;
   state.warpPreviewCanvas = null;
+  state.gridLayerCanvas = null;
+  state.stoneLayerCanvas = null;
+  state.imageProcessingMeta = null;
+  state.autoProcessPending = false;
+  state.boardSizeInference = null;
+  state.detectionDebug = null;
+  state.detectionDebugFrameIndex = -1;
   state.showImagePreview = false;
 
+  stopDetectionReplay();
   clearCanvas(warpCtx, warpCanvas);
+  updateImageProcessingPreviews();
   drawSgfPreview([], state.boardSize);
   sgfOutput.value = "";
-  setStatus(extractStatus, "Set 4 corners, then extract stones.");
+  setStatus(extractStatus, "Load an image to run image processing, then extract stones.");
   setStatus(sgfStatus, "No SGF generated yet.");
   updateCropModeUI();
   updateShiftLabel();
@@ -120,7 +129,12 @@ function loadImageFromBlob(blob, sourceLabel) {
     state.imageLoaded = true;
     resetStateForNewImage();
     drawSourceImage();
-    setStatus(cornerStatus, `${sourceLabel} image loaded. Select corners or run auto-detect.`);
+    if (state.cvReady) {
+      processImageForBoard({ forceRedetect: true, sourceLabel });
+    } else {
+      state.autoProcessPending = true;
+      setStatus(cornerStatus, `${sourceLabel} image loaded. Waiting for OpenCV to process the board.`);
+    }
   };
   img.onerror = () => {
     URL.revokeObjectURL(imageUrl);
@@ -163,8 +177,26 @@ pasteZone.addEventListener("paste", (event) => {
 });
 
 boardSizeSelect.addEventListener("change", () => {
-  state.boardSize = Number(boardSizeSelect.value);
-  setStatus(extractStatus, `Board size set to ${state.boardSize}x${state.boardSize}. Re-extract after changes.`);
+  if (boardSizeSelect.value === "auto") {
+    state.boardSizeMode = "auto";
+  } else {
+    state.boardSizeMode = "manual";
+    state.boardSize = Number(boardSizeSelect.value);
+  }
+  if (state.imageLoaded) {
+    processImageForBoard({ sourceLabel: "Board size updated" });
+    if (state.boardSizeMode === "auto") {
+      setStatus(extractStatus, "Board size set to auto. Image processing refreshed with inferred board size; re-extract stones to apply.");
+    } else {
+      setStatus(extractStatus, `Board size locked to ${state.boardSize}x${state.boardSize}. Image processing refreshed; re-extract stones to apply the new size.`);
+    }
+  } else {
+    if (state.boardSizeMode === "auto") {
+      setStatus(extractStatus, "Board size set to auto.");
+    } else {
+      setStatus(extractStatus, `Board size locked to ${state.boardSize}x${state.boardSize}.`);
+    }
+  }
 });
 blackThresholdInput.addEventListener("change", () => {
   const val = Math.max(1, Number(blackThresholdInput.value) || DEFAULT_BLACK_THRESHOLD);
@@ -226,7 +258,7 @@ sourceCanvas.addEventListener("click", (event) => {
   } else {
     state.corners = orderedCorners(state.corners);
     drawSourceImage();
-    setStatus(cornerStatus, "4 corners set. Proceed to extract stones.");
+    processImageForBoard({ sourceLabel: "Manual corners" });
   }
 });
 
@@ -265,10 +297,14 @@ sourceCanvas.addEventListener("mouseleave", () => {
 });
 
 autoCornersBtn.addEventListener("click", () => {
-  autoDetectCorners();
+  processImageForBoard({ forceRedetect: true, sourceLabel: "Board re-detect" });
+});
+replayDetectionBtn?.addEventListener("click", () => {
+  playDetectionReplay();
 });
 
 resetCornersBtn.addEventListener("click", () => {
+  stopDetectionReplay();
   state.corners = [];
   state.activeCorners = [];
   state.shiftX = 0;
@@ -281,11 +317,18 @@ resetCornersBtn.addEventListener("click", () => {
   state.stones = [];
   state.warpedImageData = null;
   state.warpPreviewCanvas = null;
+  state.gridLayerCanvas = null;
+  state.stoneLayerCanvas = null;
+  state.imageProcessingMeta = null;
+  state.boardSizeInference = null;
+  state.detectionDebug = null;
+  state.detectionDebugFrameIndex = -1;
   state.showImagePreview = false;
   drawSourceImage();
   clearCanvas(warpCtx, warpCanvas);
-  setStatus(cornerStatus, "Corners reset.");
-  setStatus(extractStatus, "Set 4 corners, then extract stones.");
+  updateImageProcessingPreviews();
+  setStatus(cornerStatus, "Board detection reset. Click corners manually or run board re-detect.");
+  setStatus(extractStatus, "Image processing reset. Rebuild the board before extracting stones.");
   updateShiftLabel();
 });
 
@@ -396,13 +439,18 @@ downloadBtn.addEventListener("click", downloadSgf);
 function waitForCv() {
   if (window.cv && typeof window.cv.Mat === "function") {
     state.cvReady = true;
-    setStatus(cornerStatus, "OpenCV ready. Upload an image.");
+    if (state.imageLoaded && state.autoProcessPending) {
+      processImageForBoard({ forceRedetect: true, sourceLabel: "Loaded" });
+    } else {
+      setStatus(cornerStatus, "OpenCV ready. Upload an image.");
+    }
   } else {
     setTimeout(waitForCv, 150);
   }
 }
 
 waitForCv();
+updateImageProcessingPreviews();
 drawSgfPreview([], state.boardSize);
 updateCropModeUI();
 updateShiftLabel();
@@ -411,3 +459,4 @@ blackThresholdInput.value = String(DEFAULT_BLACK_THRESHOLD);
 whiteThresholdInput.value = String(DEFAULT_WHITE_THRESHOLD);
 autoBalanceCheckbox.checked = true;
 detectionModeSelect.value = state.detectionMode;
+boardSizeSelect.value = state.boardSizeMode === "auto" ? "auto" : String(state.boardSize);

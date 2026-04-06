@@ -147,6 +147,26 @@ canvas {
   margin-bottom: 0.5rem;
 }
 
+.layer-studio {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.7rem;
+  margin-top: 0.7rem;
+}
+
+.layer-pane {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(17, 17, 17, 0.13);
+  border-radius: 0.75rem;
+  padding: 0.55rem;
+}
+
+#gridLayerCanvas,
+#stoneLayerCanvas {
+  margin-bottom: 0;
+  background: linear-gradient(145deg, rgba(238, 232, 219, 0.92), rgba(245, 242, 236, 0.95));
+}
+
 .hint,
 .status {
   margin: 0.25rem 0;
@@ -303,5 +323,9 @@ textarea {
 
   #step2-card {
     grid-column: span 1;
+  }
+
+  .layer-studio {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

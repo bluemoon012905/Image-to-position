@@ -60,38 +60,53 @@ function warpBoardFromCorners() {
   return true;
 }
 
-function autoDetectCorners() {
-  if (!state.cvReady || !state.image) {
-    setStatus(cornerStatus, "OpenCV not ready or image not loaded.");
+function renderWarpBaseImage() {
+  if (!state.warpedImageData) {
+    clearCanvas(warpCtx, warpCanvas);
     return;
   }
+  warpCanvas.width = state.warpedImageData.width;
+  warpCanvas.height = state.warpedImageData.height;
+  warpCtx.putImageData(state.warpedImageData, 0, 0);
+}
 
-  const src = cv.imread(state.image);
-  const gray = new cv.Mat();
-  const denoised = new cv.Mat();
-  const contrasted = new cv.Mat();
-  const edgesRaw = new cv.Mat();
-  const edges = new cv.Mat();
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
-  const morphKernel = cv.Mat.ones(3, 3, cv.CV_8U);
-
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.bilateralFilter(gray, denoised, 9, 75, 75, cv.BORDER_DEFAULT);
-  if (typeof cv.createCLAHE === "function") {
-    const clahe = cv.createCLAHE(2.0, new cv.Size(8, 8));
-    clahe.apply(denoised, contrasted);
-    clahe.delete();
-  } else {
-    denoised.copyTo(contrasted);
+function polygonArea(points) {
+  if (!points || points.length < 3) return 0;
+  let area = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    area += a.x * b.y - b.x * a.y;
   }
-  cv.Canny(contrasted, edgesRaw, 45, 140);
-  cv.morphologyEx(edgesRaw, edges, cv.MORPH_CLOSE, morphKernel);
-  cv.dilate(edges, edges, morphKernel, new cv.Point(-1, -1), 1);
-  cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+  return Math.abs(area) * 0.5;
+}
 
+function quadBounds(points) {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+  };
+}
+
+function imageBorderContactRatio(bounds, width, height) {
+  const marginX = Math.max(6, width * 0.02);
+  const marginY = Math.max(6, height * 0.02);
+  let hits = 0;
+  if (bounds.minX <= marginX) hits += 1;
+  if (bounds.minY <= marginY) hits += 1;
+  if (width - bounds.maxX <= marginX) hits += 1;
+  if (height - bounds.maxY <= marginY) hits += 1;
+  return hits / 4;
+}
+
+function detectBestContourQuad(src, edges, contours) {
   let bestContour = null;
   let bestScore = 0;
+  let bestMeta = null;
   const imageArea = src.cols * src.rows;
   const minContourArea = imageArea * 0.08;
 
@@ -120,8 +135,12 @@ function autoDetectCorners() {
         }
         bestContour = approx.clone();
         bestScore = score;
-      } else {
-        // no-op
+        bestMeta = {
+          area,
+          areaRatio: area / imageArea,
+          extent,
+          score,
+        };
       }
     }
 
@@ -131,39 +150,471 @@ function autoDetectCorners() {
   }
 
   if (!bestContour) {
-    setStatus(cornerStatus, "Auto-detect failed. Click 4 corners manually.");
-  } else {
-    const originalPoints = [];
-    for (let i = 0; i < 4; i += 1) {
-      const x = bestContour.intPtr(i, 0)[0];
-      const y = bestContour.intPtr(i, 0)[1];
-      originalPoints.push({ x, y });
+    return null;
+  }
+
+  const points = [];
+  for (let i = 0; i < 4; i += 1) {
+    points.push({
+      x: bestContour.intPtr(i, 0)[0],
+      y: bestContour.intPtr(i, 0)[1],
+    });
+  }
+  bestContour.delete();
+  const ordered = orderedCorners(points);
+  const bounds = quadBounds(ordered);
+
+  return {
+    points: ordered,
+    meta: {
+      ...bestMeta,
+      bounds,
+      borderContactRatio: imageBorderContactRatio(bounds, src.cols, src.rows),
+    },
+  };
+}
+
+function extractEdgeFeaturePoints(edges) {
+  const candidatePoints = [];
+  if (typeof cv.goodFeaturesToTrack !== "function") {
+    return candidatePoints;
+  }
+
+  const cornersMat = new cv.Mat();
+  cv.goodFeaturesToTrack(edges, cornersMat, 160, 0.01, 8);
+  for (let i = 0; i < cornersMat.rows; i += 1) {
+    candidatePoints.push({
+      x: cornersMat.data32F[i * 2],
+      y: cornersMat.data32F[i * 2 + 1],
+    });
+  }
+  cornersMat.delete();
+  return candidatePoints;
+}
+
+function collectLineSegments(edges, width, height) {
+  if (typeof cv.HoughLinesP !== "function") {
+    return [];
+  }
+
+  const lines = new cv.Mat();
+  const segments = [];
+  const minDim = Math.min(width, height);
+  cv.HoughLinesP(
+    edges,
+    lines,
+    1,
+    Math.PI / 180,
+    70,
+    Math.max(28, Math.round(minDim * 0.12)),
+    Math.max(10, Math.round(minDim * 0.03))
+  );
+
+  for (let i = 0; i < lines.rows; i += 1) {
+    const base = i * 4;
+    const x1 = lines.data32S[base];
+    const y1 = lines.data32S[base + 1];
+    const x2 = lines.data32S[base + 2];
+    const y2 = lines.data32S[base + 3];
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const length = Math.hypot(dx, dy);
+    if (length < Math.max(22, minDim * 0.08)) continue;
+    segments.push({ x1, y1, x2, y2, dx, dy, length });
+  }
+
+  lines.delete();
+  return segments;
+}
+
+function clusterBoundaryLines(lines, interceptTolerance) {
+  if (!lines.length) return [];
+
+  const sorted = [...lines].sort((a, b) => a.intercept - b.intercept);
+  const clusters = [];
+
+  for (const line of sorted) {
+    const last = clusters[clusters.length - 1];
+    if (!last || Math.abs(line.intercept - last.intercept) > interceptTolerance) {
+      clusters.push({
+        interceptWeighted: line.intercept * line.length,
+        slopeWeighted: line.slope * line.length,
+        totalLength: line.length,
+        lineCount: 1,
+        minAlong: Math.min(line.alongA, line.alongB),
+        maxAlong: Math.max(line.alongA, line.alongB),
+      });
+      continue;
     }
 
-    let candidatePoints = [];
-    if (typeof cv.goodFeaturesToTrack === "function") {
-      const cornersMat = new cv.Mat();
-      cv.goodFeaturesToTrack(edges, cornersMat, 160, 0.01, 8);
-      for (let i = 0; i < cornersMat.rows; i += 1) {
-        candidatePoints.push({
-          x: cornersMat.data32F[i * 2],
-          y: cornersMat.data32F[i * 2 + 1],
-        });
+    last.interceptWeighted += line.intercept * line.length;
+    last.slopeWeighted += line.slope * line.length;
+    last.totalLength += line.length;
+    last.lineCount += 1;
+    last.minAlong = Math.min(last.minAlong, line.alongA, line.alongB);
+    last.maxAlong = Math.max(last.maxAlong, line.alongA, line.alongB);
+  }
+
+  return clusters.map((cluster) => ({
+    intercept: cluster.interceptWeighted / Math.max(1, cluster.totalLength),
+    slope: cluster.slopeWeighted / Math.max(1, cluster.totalLength),
+    totalLength: cluster.totalLength,
+    lineCount: cluster.lineCount,
+    span: cluster.maxAlong - cluster.minAlong,
+  }));
+}
+
+function pickBoundaryPair(clusters, minCoverage) {
+  const eligible = clusters
+    .filter((cluster) => cluster.span >= minCoverage)
+    .sort((a, b) => a.intercept - b.intercept);
+
+  if (eligible.length < 2) return null;
+  return {
+    first: eligible[0],
+    last: eligible[eligible.length - 1],
+    all: eligible,
+  };
+}
+
+function adjacentClusterSpacing(clusters) {
+  if (!clusters || clusters.length < 3) return 0;
+  const diffs = [];
+  for (let i = 1; i < clusters.length; i += 1) {
+    const diff = clusters[i].intercept - clusters[i - 1].intercept;
+    if (diff > 3) {
+      diffs.push(diff);
+    }
+  }
+  return diffs.length ? median(diffs) : 0;
+}
+
+function findBestGridRun(clusters, minCoverage) {
+  const eligible = clusters
+    .filter((cluster) => cluster.span >= minCoverage)
+    .sort((a, b) => a.intercept - b.intercept);
+  if (eligible.length < 4) return null;
+
+  const spacing = adjacentClusterSpacing(eligible);
+  if (!spacing || !Number.isFinite(spacing)) return null;
+
+  const tolerance = Math.max(4, spacing * 0.28);
+  let best = null;
+
+  for (let start = 0; start < eligible.length; start += 1) {
+    const run = [eligible[start]];
+    let totalLength = eligible[start].totalLength;
+    let gaps = 0;
+
+    for (let i = start + 1; i < eligible.length; i += 1) {
+      const prev = run[run.length - 1];
+      const next = eligible[i];
+      const diff = next.intercept - prev.intercept;
+      const steps = Math.max(1, Math.round(diff / spacing));
+      const expected = steps * spacing;
+
+      if (steps > 3 || Math.abs(diff - expected) > tolerance * steps) {
+        if (diff > spacing * 3.5) {
+          break;
+        }
+        continue;
       }
-      cornersMat.delete();
+
+      run.push(next);
+      totalLength += next.totalLength;
+      gaps += Math.max(0, steps - 1);
     }
 
-    const orderedOriginal = orderedCorners(originalPoints);
-    const refinedOriginal = refineCornersByQuadrants(candidatePoints, orderedOriginal);
-    const expandedOriginal = expandCornersOutward(refinedOriginal, src.cols, src.rows, 1.035);
+    if (run.length < 4) continue;
+    const first = run[0];
+    const last = run[run.length - 1];
+    const coveredSpan = last.intercept - first.intercept;
+    const score = run.length * 20 + totalLength * 0.015 - gaps * 6 + coveredSpan * 0.02;
+
+    if (!best || score > best.score) {
+      best = {
+        spacing,
+        tolerance,
+        run,
+        first,
+        last,
+        observedLines: run.length,
+        coveredSpan,
+        gaps,
+        totalLength,
+        score,
+      };
+    }
+  }
+
+  return best;
+}
+
+function intersectBoundaryLines(vertical, horizontal) {
+  const denom = 1 - vertical.slope * horizontal.slope;
+  if (Math.abs(denom) < 1e-5) return null;
+  const x = (vertical.slope * horizontal.intercept + vertical.intercept) / denom;
+  const y = horizontal.slope * x + horizontal.intercept;
+  return { x, y };
+}
+
+function linesForDebug(clusters, axis, color, width = 1.8, dash = [8, 6]) {
+  return (clusters || []).map((cluster) => ({
+    axis,
+    intercept: cluster.intercept,
+    slope: cluster.slope,
+    color,
+    width,
+    dash,
+  }));
+}
+
+function buildRunFrames(run, axis, color, titlePrefix) {
+  if (!run?.run?.length) return [];
+  const frames = [];
+  const acc = [];
+  for (let i = 0; i < run.run.length; i += 1) {
+    const cluster = run.run[i];
+    acc.push({
+      axis,
+      intercept: cluster.intercept,
+      slope: cluster.slope,
+      color,
+      width: 2.8,
+      dash: [],
+    });
+    frames.push({
+      label: `${titlePrefix}: ${i + 1} line${i === 0 ? "" : "s"} in evenly spaced run`,
+      lines: [...acc],
+      duration: 420,
+    });
+  }
+  return frames;
+}
+
+function buildDetectionDebugFrames(contourCandidate, lineCandidate, detectionMethod) {
+  const frames = [];
+  const debug = lineCandidate?.debug;
+
+  if (debug?.verticalClusters?.length) {
+    frames.push({
+      label: `Grid scan: detected ${debug.verticalClusters.length} vertical line families`,
+      lines: linesForDebug(debug.verticalClusters, "vertical", "rgba(35, 118, 255, 0.55)", 1.6, [6, 8]),
+      duration: 520,
+    });
+  }
+
+  if (debug?.verticalRun) {
+    frames.push(...buildRunFrames(debug.verticalRun, "vertical", "rgba(35, 118, 255, 0.95)", "Grid scan: expanding vertical run"));
+  }
+
+  if (debug?.horizontalClusters?.length) {
+    frames.push({
+      label: `Grid scan: detected ${debug.horizontalClusters.length} horizontal line families`,
+      lines: linesForDebug(debug.horizontalClusters, "horizontal", "rgba(255, 132, 28, 0.55)", 1.6, [6, 8]),
+      duration: 520,
+    });
+  }
+
+  if (debug?.horizontalRun) {
+    frames.push(...buildRunFrames(debug.horizontalRun, "horizontal", "rgba(255, 132, 28, 0.95)", "Grid scan: expanding horizontal run"));
+  }
+
+  if (contourCandidate?.points) {
+    frames.push({
+      label:
+        detectionMethod === "grid-lines"
+          ? "Contour candidate rejected"
+          : "Contour candidate selected",
+      quads: [{ points: contourCandidate.points, color: "rgba(196, 56, 56, 0.95)", width: 2.2 }],
+      duration: 620,
+    });
+  }
+
+  if (lineCandidate?.points) {
+    frames.push({
+      label:
+        detectionMethod === "grid-lines"
+          ? "Grid scan final frame selected"
+          : "Grid scan final frame considered",
+      quads: [{ points: lineCandidate.points, color: "rgba(22, 150, 93, 0.95)", width: 2.6 }],
+      duration: 900,
+    });
+  }
+
+  return frames;
+}
+
+function detectGridFrameQuad(edges, width, height) {
+  const segments = collectLineSegments(edges, width, height);
+  if (!segments.length) return null;
+
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const verticalLines = [];
+  const horizontalLines = [];
+
+  for (const segment of segments) {
+    const angle = (Math.atan2(segment.dy, segment.dx) * 180) / Math.PI;
+    const absAngle = Math.abs(angle);
+
+    if (Math.abs(absAngle - 90) <= 18) {
+      const slope = segment.dy === 0 ? 0 : segment.dx / segment.dy;
+      const intercept = ((segment.x1 - slope * segment.y1) + (segment.x2 - slope * segment.y2)) / 2;
+      verticalLines.push({
+        intercept,
+        slope,
+        length: segment.length,
+        alongA: segment.y1,
+        alongB: segment.y2,
+      });
+    } else if (absAngle <= 18 || absAngle >= 162) {
+      const slope = segment.dx === 0 ? 0 : segment.dy / segment.dx;
+      const intercept = ((segment.y1 - slope * segment.x1) + (segment.y2 - slope * segment.x2)) / 2;
+      horizontalLines.push({
+        intercept,
+        slope,
+        length: segment.length,
+        alongA: segment.x1,
+        alongB: segment.x2,
+      });
+    }
+  }
+
+  const verticalClusters = clusterBoundaryLines(verticalLines, Math.max(8, width * 0.012));
+  const horizontalClusters = clusterBoundaryLines(horizontalLines, Math.max(8, height * 0.012));
+  const verticalRun = findBestGridRun(verticalClusters, height * 0.22);
+  const horizontalRun = findBestGridRun(horizontalClusters, width * 0.22);
+  const verticalPair = pickBoundaryPair(verticalClusters, height * 0.22);
+  const horizontalPair = pickBoundaryPair(horizontalClusters, width * 0.22);
+
+  const verticalSource = verticalRun || verticalPair;
+  const horizontalSource = horizontalRun || horizontalPair;
+  if (!verticalSource || !horizontalSource) return null;
+
+  const leftLine = {
+    intercept: verticalSource.first.intercept,
+    slope: verticalSource.first.slope,
+  };
+  const rightLine = {
+    intercept: verticalSource.last.intercept,
+    slope: verticalSource.last.slope,
+  };
+  const topLine = {
+    intercept: horizontalSource.first.intercept,
+    slope: horizontalSource.first.slope,
+  };
+  const bottomLine = {
+    intercept: horizontalSource.last.intercept,
+    slope: horizontalSource.last.slope,
+  };
+
+  const corners = [
+    intersectBoundaryLines(leftLine, topLine),
+    intersectBoundaryLines(rightLine, topLine),
+    intersectBoundaryLines(rightLine, bottomLine),
+    intersectBoundaryLines(leftLine, bottomLine),
+  ];
+
+  if (corners.some((point) => !point)) {
+    return null;
+  }
+
+  const clampedCorners = corners.map((point) => clampOriginalPoint(point, width, height));
+  const area = polygonArea(clampedCorners);
+  return {
+    points: orderedCorners(clampedCorners),
+    meta: {
+      area,
+      areaRatio: area / Math.max(1, width * height),
+      verticalClusters: verticalPair?.all?.length || 0,
+      horizontalClusters: horizontalPair?.all?.length || 0,
+      verticalSpacing: Number((verticalRun?.spacing || adjacentClusterSpacing(verticalPair?.all || [] ) || 0).toFixed(2)),
+      horizontalSpacing: Number((horizontalRun?.spacing || adjacentClusterSpacing(horizontalPair?.all || [] ) || 0).toFixed(2)),
+      visibleVerticalLines: verticalRun?.observedLines || 0,
+      visibleHorizontalLines: horizontalRun?.observedLines || 0,
+      verticalGaps: verticalRun?.gaps || 0,
+      horizontalGaps: horizontalRun?.gaps || 0,
+      anchorX: Number(centerX.toFixed(1)),
+      anchorY: Number(centerY.toFixed(1)),
+    },
+    debug: {
+      verticalClusters,
+      horizontalClusters,
+      verticalRun,
+      horizontalRun,
+    },
+  };
+}
+
+function autoDetectCorners(options = {}) {
+  const { suppressStatus = false } = options;
+  if (!state.cvReady || !state.image) {
+    if (!suppressStatus) {
+      setStatus(cornerStatus, "OpenCV not ready or image not loaded.");
+    }
+    return false;
+  }
+
+  const src = cv.imread(state.image);
+  const gray = new cv.Mat();
+  const denoised = new cv.Mat();
+  const contrasted = new cv.Mat();
+  const edgesRaw = new cv.Mat();
+  const edges = new cv.Mat();
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+  const morphKernel = cv.Mat.ones(3, 3, cv.CV_8U);
+
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.bilateralFilter(gray, denoised, 9, 75, 75, cv.BORDER_DEFAULT);
+  if (typeof cv.createCLAHE === "function") {
+    const clahe = cv.createCLAHE(2.0, new cv.Size(8, 8));
+    clahe.apply(denoised, contrasted);
+    clahe.delete();
+  } else {
+    denoised.copyTo(contrasted);
+  }
+  cv.Canny(contrasted, edgesRaw, 45, 140);
+  cv.morphologyEx(edgesRaw, edges, cv.MORPH_CLOSE, morphKernel);
+  cv.dilate(edges, edges, morphKernel, new cv.Point(-1, -1), 1);
+  cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+  const contourCandidate = detectBestContourQuad(src, edges, contours);
+  const lineCandidate = detectGridFrameQuad(edges, src.cols, src.rows);
+
+  let chosen = contourCandidate || lineCandidate;
+  let detectionMethod = contourCandidate ? "contour" : lineCandidate ? "grid-lines" : "";
+
+  state.detectionDebug = {
+    method: detectionMethod || "none",
+    frames: buildDetectionDebugFrames(contourCandidate, lineCandidate, detectionMethod),
+  };
+  state.detectionDebugFrameIndex = -1;
+
+  if (!chosen) {
+    if (!suppressStatus) {
+      setStatus(cornerStatus, "Auto-detect failed. Click 4 corners manually.");
+    }
+  } else {
+    const candidatePoints = extractEdgeFeaturePoints(edges);
+    const orderedOriginal = orderedCorners(chosen.points);
+    const refinedOriginal =
+      detectionMethod === "grid-lines"
+        ? orderedOriginal
+        : refineCornersByQuadrants(candidatePoints, orderedOriginal);
+    const expandFactor = detectionMethod === "grid-lines" ? 1.012 : 1.035;
+    const expandedOriginal = expandCornersOutward(refinedOriginal, src.cols, src.rows, expandFactor);
     const points = expandedOriginal.map(originalToCanvas);
     state.corners = orderedCorners(points);
     drawSourceImage();
 
-    setStatus(
-      cornerStatus,
-      "Detected corners automatically (enhanced edges + 4-quadrant refinement). Review and adjust if needed."
-    );
+    if (!suppressStatus) {
+      setStatus(
+        cornerStatus,
+        `Detected board border automatically using ${detectionMethod || "contour"} geometry. Review and adjust manually if needed.`
+      );
+    }
   }
 
   src.delete();
@@ -175,37 +626,372 @@ function autoDetectCorners() {
   morphKernel.delete();
   contours.delete();
   hierarchy.delete();
-  if (bestContour) bestContour.delete();
+  if (state.detectionDebug?.frames?.length) {
+    playDetectionReplay();
+  }
+  return Boolean(state.corners.length === 4);
 }
 
-function drawWarpGrid() {
+function drawWarpGrid(targetCtx = warpCtx, targetCanvas = warpCanvas, color = "rgba(24,24,24,0.65)") {
   if (!state.warpedImageData) return;
 
   const n = state.boardSize;
-  const size = warpCanvas.width;
+  const size = targetCanvas.width;
   const step = (size - 1) / (n - 1);
 
-  warpCtx.save();
-  warpCtx.strokeStyle = "rgba(24,24,24,0.65)";
-  warpCtx.lineWidth = 1;
+  targetCtx.save();
+  targetCtx.strokeStyle = color;
+  targetCtx.lineWidth = 1;
 
   for (let i = 0; i < n; i += 1) {
     const x = i * step;
-    warpCtx.beginPath();
-    warpCtx.moveTo(x, 0);
-    warpCtx.lineTo(x, size);
-    warpCtx.stroke();
+    targetCtx.beginPath();
+    targetCtx.moveTo(x, 0);
+    targetCtx.lineTo(x, size);
+    targetCtx.stroke();
   }
 
   for (let i = 0; i < n; i += 1) {
     const y = i * step;
-    warpCtx.beginPath();
-    warpCtx.moveTo(0, y);
-    warpCtx.lineTo(size, y);
-    warpCtx.stroke();
+    targetCtx.beginPath();
+    targetCtx.moveTo(0, y);
+    targetCtx.lineTo(size, y);
+    targetCtx.stroke();
   }
 
-  warpCtx.restore();
+  targetCtx.restore();
+}
+
+function maskToTransparentCanvas(maskMat, color) {
+  const canvas = createOffscreenCanvas(maskMat.cols, maskMat.rows);
+  const ctx = canvas.getContext("2d");
+  const img = ctx.createImageData(maskMat.cols, maskMat.rows);
+
+  for (let i = 0; i < maskMat.data.length; i += 1) {
+    const value = maskMat.data[i];
+    const base = i * 4;
+    img.data[base] = color.r;
+    img.data[base + 1] = color.g;
+    img.data[base + 2] = color.b;
+    img.data[base + 3] = value > 0 ? Math.max(50, Math.min(255, value)) : 0;
+  }
+
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+function mean(values) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function stddev(values, avg = mean(values)) {
+  if (!values.length) return 0;
+  const variance =
+    values.reduce((sum, value) => sum + (value - avg) * (value - avg), 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+function smoothSeries(values, radius = 2) {
+  const out = new Array(values.length).fill(0);
+  for (let i = 0; i < values.length; i += 1) {
+    let sum = 0;
+    let count = 0;
+    const min = Math.max(0, i - radius);
+    const max = Math.min(values.length - 1, i + radius);
+    for (let j = min; j <= max; j += 1) {
+      sum += values[j];
+      count += 1;
+    }
+    out[i] = count ? sum / count : 0;
+  }
+  return out;
+}
+
+function sampleSeriesBand(values, center, radius) {
+  const min = Math.max(0, Math.floor(center - radius));
+  const max = Math.min(values.length - 1, Math.ceil(center + radius));
+  let sum = 0;
+  let count = 0;
+  for (let i = min; i <= max; i += 1) {
+    sum += values[i];
+    count += 1;
+  }
+  return count ? sum / count : 0;
+}
+
+function buildWarpProjectionSeries() {
+  if (!state.warpedImageData) return null;
+
+  const { data, width, height } = state.warpedImageData;
+  const cols = new Array(width).fill(0);
+  const rows = new Array(height).fill(0);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = (y * width + x) * 4;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const brightness = 0.299 * r + 0.587 * g + 0.114 * b;
+      const darkness = 255 - brightness;
+      cols[x] += darkness;
+      rows[y] += darkness;
+    }
+  }
+
+  for (let x = 0; x < width; x += 1) {
+    cols[x] /= height;
+  }
+  for (let y = 0; y < height; y += 1) {
+    rows[y] /= width;
+  }
+
+  return {
+    cols: smoothSeries(cols, 2),
+    rows: smoothSeries(rows, 2),
+    width,
+    height,
+  };
+}
+
+function collectExpectedLineSamples(series, n) {
+  const step = (series.length - 1) / Math.max(1, n - 1);
+  const onRadius = Math.max(1, Math.min(7, Math.round(step * 0.12)));
+  const offRadius = Math.max(1, Math.min(7, Math.round(step * 0.18)));
+  const onSamples = [];
+  const offSamples = [];
+
+  for (let i = 0; i < n; i += 1) {
+    onSamples.push(sampleSeriesBand(series, i * step, onRadius));
+  }
+
+  for (let i = 0; i < n - 1; i += 1) {
+    offSamples.push(sampleSeriesBand(series, i * step + step * 0.5, offRadius));
+  }
+
+  return { onSamples, offSamples, step };
+}
+
+function scoreBoardSizeCandidate(n, projection) {
+  const xSamples = collectExpectedLineSamples(projection.cols, n);
+  const ySamples = collectExpectedLineSamples(projection.rows, n);
+  const onSamples = [...xSamples.onSamples, ...ySamples.onSamples];
+  const offSamples = [...xSamples.offSamples, ...ySamples.offSamples];
+  const onMean = mean(onSamples);
+  const offMean = mean(offSamples);
+  const onStd = stddev(onSamples, onMean);
+  const contrast = onMean - offMean;
+  const normalizedContrast = contrast / Math.max(1, onMean);
+  const stability = 1 - Math.min(1, onStd / Math.max(1, onMean));
+  const score = normalizedContrast * 100 + stability * 18 + onMean * 0.04;
+
+  return {
+    boardSize: n,
+    step: Number(xSamples.step.toFixed(2)),
+    onMean: Number(onMean.toFixed(2)),
+    offMean: Number(offMean.toFixed(2)),
+    contrast: Number(contrast.toFixed(2)),
+    stability: Number(stability.toFixed(3)),
+    score: Number(score.toFixed(2)),
+  };
+}
+
+function inferBoardSizeFromWarpedImage() {
+  const projection = buildWarpProjectionSeries();
+  if (!projection) return null;
+
+  const candidates = [9, 13, 19].map((n) => scoreBoardSizeCandidate(n, projection));
+  candidates.sort((a, b) => b.score - a.score);
+
+  const best = candidates[0];
+  const runnerUp = candidates[1];
+  return {
+    boardSize: best.boardSize,
+    confidence: Number((best.score - (runnerUp?.score || 0)).toFixed(2)),
+    candidates,
+  };
+}
+
+function buildGridLayerCanvas() {
+  if (!state.warpedImageData || !state.cvReady) return null;
+
+  const src = cv.imread(getWarpPreviewCanvas());
+  const gray = new cv.Mat();
+  const binary = new cv.Mat();
+  const horizontal = new cv.Mat();
+  const vertical = new cv.Mat();
+  const merged = new cv.Mat();
+  const cleaned = new cv.Mat();
+
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.adaptiveThreshold(
+    gray,
+    binary,
+    255,
+    cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+    cv.THRESH_BINARY_INV,
+    31,
+    10
+  );
+
+  const step = (src.cols - 1) / Math.max(1, state.boardSize - 1);
+  const hSize = Math.max(11, Math.round(step * 0.95));
+  const vSize = Math.max(11, Math.round(step * 0.95));
+  const hKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(hSize, 1));
+  const vKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, vSize));
+  cv.morphologyEx(binary, horizontal, cv.MORPH_OPEN, hKernel);
+  cv.morphologyEx(binary, vertical, cv.MORPH_OPEN, vKernel);
+  cv.bitwise_or(horizontal, vertical, merged);
+  cv.dilate(
+    merged,
+    cleaned,
+    cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(2, 2)),
+    new cv.Point(-1, -1),
+    1
+  );
+
+  const layerCanvas = maskToTransparentCanvas(cleaned, { r: 28, g: 95, b: 74 });
+
+  src.delete();
+  gray.delete();
+  binary.delete();
+  horizontal.delete();
+  vertical.delete();
+  merged.delete();
+  cleaned.delete();
+  hKernel.delete();
+  vKernel.delete();
+
+  return layerCanvas;
+}
+
+function buildStoneLayerCanvas() {
+  if (!state.warpedImageData) return null;
+
+  const size = state.warpedImageData.width;
+  const n = state.boardSize;
+  const step = (size - 1) / Math.max(1, n - 1);
+  const circles = detectCircleCandidates(step);
+  const points = circlesToIntersections(circles, n, step);
+  const source = getWarpPreviewCanvas();
+  const layerCanvas = createOffscreenCanvas(size, size);
+  const ctx = layerCanvas.getContext("2d");
+
+  for (const point of points) {
+    const radius = Math.max(step * 0.34, Math.min(step * 0.58, point.r || step * 0.44));
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(source, 0, 0);
+    ctx.restore();
+
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(36, 33, 25, 0.35)";
+    ctx.lineWidth = Math.max(1, step * 0.035);
+    ctx.stroke();
+  }
+
+  return {
+    canvas: layerCanvas,
+    meta: {
+      candidates: circles.length,
+      intersections: points.length,
+    },
+  };
+}
+
+function refreshImageProcessingLayers() {
+  if (!state.warpedImageData) {
+    state.gridLayerCanvas = null;
+    state.stoneLayerCanvas = null;
+    state.imageProcessingMeta = null;
+    updateImageProcessingPreviews();
+    renderWarpBaseImage();
+    return false;
+  }
+
+  state.gridLayerCanvas = buildGridLayerCanvas();
+  const stoneLayer = buildStoneLayerCanvas();
+  state.stoneLayerCanvas = stoneLayer?.canvas || null;
+  state.imageProcessingMeta = {
+    stoneCandidates: stoneLayer?.meta?.candidates || 0,
+    stoneIntersections: stoneLayer?.meta?.intersections || 0,
+    inferredBoardSize: state.boardSizeInference?.boardSize || null,
+    inferenceConfidence: state.boardSizeInference?.confidence || 0,
+  };
+
+  updateImageProcessingPreviews();
+  renderWarpBaseImage();
+  drawWarpGrid();
+  return true;
+}
+
+function processImageForBoard(options = {}) {
+  const { forceRedetect = false, sourceLabel = "Loaded" } = options;
+
+  if (!state.imageLoaded || !state.image || !state.cvReady) {
+    state.autoProcessPending = true;
+    return false;
+  }
+
+  state.autoProcessPending = false;
+
+  let hasCorners = state.corners.length === 4;
+  if (forceRedetect || !hasCorners) {
+    hasCorners = autoDetectCorners({ suppressStatus: true });
+  }
+
+  if (!hasCorners) {
+    state.warpedImageData = null;
+    state.gridLayerCanvas = null;
+    state.stoneLayerCanvas = null;
+    state.imageProcessingMeta = null;
+    state.boardSizeInference = null;
+    updateImageProcessingPreviews();
+    clearCanvas(warpCtx, warpCanvas);
+    setStatus(cornerStatus, `${sourceLabel} image loaded, but board auto-detect missed. Click corners manually to continue.`);
+    setStatus(extractStatus, "Image processing could not lock the board yet.");
+    return false;
+  }
+
+  drawSourceImage();
+  const warped = warpBoardFromCorners();
+  if (!warped) {
+    setStatus(cornerStatus, "Board border was found, but warping failed.");
+    return false;
+  }
+
+  let inferenceNote = "";
+  if (state.boardSizeMode === "auto") {
+    const inferred = inferBoardSizeFromWarpedImage();
+    state.boardSizeInference = inferred;
+    if (inferred?.boardSize) {
+      state.boardSize = inferred.boardSize;
+      boardSizeSelect.value = "auto";
+      inferenceNote = ` Inferred ${state.boardSize}x${state.boardSize} board.`;
+    } else {
+      inferenceNote = ` Board size inference failed; keeping ${state.boardSize}x${state.boardSize}.`;
+    }
+  } else {
+    state.boardSizeInference = null;
+    boardSizeSelect.value = String(state.boardSize);
+  }
+
+  refreshImageProcessingLayers();
+  const meta = state.imageProcessingMeta || { stoneCandidates: 0, stoneIntersections: 0 };
+  setStatus(
+    cornerStatus,
+    `Board border detected automatically.${inferenceNote} Grid and stone layers prepared from the warped board.`
+  );
+  setStatus(
+    extractStatus,
+    `Image processing ready for ${state.boardSize}x${state.boardSize}.${inferenceNote} Stone layer has ${meta.stoneIntersections} on-grid candidates from ${meta.stoneCandidates} circle hits. Extract stones to classify them.`
+  );
+  return true;
 }
 
 function sampleCircleStats(imgData, cx, cy, rInner, rOuter = rInner) {
@@ -1001,4 +1787,3 @@ async function extractStones() {
   );
   state.extracting = false;
 }
-

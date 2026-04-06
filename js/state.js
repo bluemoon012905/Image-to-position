@@ -2,6 +2,7 @@ const state = {
   image: null,
   imageLoaded: false,
   boardSize: 19,
+  boardSizeMode: "auto",
   corners: [],
   cvReady: false,
   warpedImageData: null,
@@ -24,12 +25,24 @@ const state = {
   detectionMode: "preprocessed",
   showImagePreview: false,
   warpPreviewCanvas: null,
+  gridLayerCanvas: null,
+  stoneLayerCanvas: null,
+  imageProcessingMeta: null,
+  autoProcessPending: false,
+  boardSizeInference: null,
+  detectionDebug: null,
+  detectionDebugFrameIndex: -1,
+  detectionDebugTimer: null,
 };
 
 const sourceCanvas = document.getElementById("sourceCanvas");
 const sourceCtx = sourceCanvas.getContext("2d");
 const warpCanvas = document.getElementById("warpCanvas");
 const warpCtx = warpCanvas.getContext("2d");
+const gridLayerCanvas = document.getElementById("gridLayerCanvas");
+const gridLayerCtx = gridLayerCanvas.getContext("2d");
+const stoneLayerCanvas = document.getElementById("stoneLayerCanvas");
+const stoneLayerCtx = stoneLayerCanvas.getContext("2d");
 const sgfPreviewCanvas = document.getElementById("sgfPreviewCanvas");
 const sgfPreviewCtx = sgfPreviewCanvas.getContext("2d");
 
@@ -37,6 +50,7 @@ const imageInput = document.getElementById("imageInput");
 const pasteZone = document.getElementById("pasteZone");
 const boardSizeSelect = document.getElementById("boardSizeSelect");
 const autoCornersBtn = document.getElementById("autoCornersBtn");
+const replayDetectionBtn = document.getElementById("replayDetectionBtn");
 const resetCornersBtn = document.getElementById("resetCornersBtn");
 const cropModeBtn = document.getElementById("cropModeBtn");
 const applyCropBtn = document.getElementById("applyCropBtn");
@@ -51,6 +65,7 @@ const generateBtn = document.getElementById("generateBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 
 const cornerStatus = document.getElementById("cornerStatus");
+const detectionDebugStatus = document.getElementById("detectionDebugStatus");
 const extractStatus = document.getElementById("extractStatus");
 const sgfStatus = document.getElementById("sgfStatus");
 const sgfOutput = document.getElementById("sgfOutput");
@@ -72,4 +87,3 @@ const shiftValue = document.getElementById("shiftValue");
 const LETTERS = "abcdefghijklmnopqrstuvwxyz";
 const DEFAULT_BLACK_THRESHOLD = 26;
 const DEFAULT_WHITE_THRESHOLD = 22;
-
